@@ -1017,6 +1017,8 @@ export function applyExternalUsageOverrides(baseTotals, liveTotals = null) {
     const externalTokensWithLive = Math.round(Number(current.claudeCode.totalTokens || 0)) + liveDelta.totalTokens;
     const externalCostWithLive = roundCost(Number(current.claudeCode.totalCostUsd || 0) + liveDelta.totalCostUsd);
 
+    // Keep the higher side between local and external to avoid dropping billable
+    // local usage when external tools report token-only (cost=0) segments.
     merged.byTool['claude-code'].totalTokens = Math.max(
       Math.round(Number(merged.byTool['claude-code'].totalTokens || 0)),
       externalTokensWithLive
@@ -1032,6 +1034,7 @@ export function applyExternalUsageOverrides(baseTotals, liveTotals = null) {
     const externalTokensWithLive = Math.round(Number(current.codex.totalTokens || 0)) + liveDelta.totalTokens;
     const externalCostWithLive = roundCost(Number(current.codex.totalCostUsd || 0) + liveDelta.totalCostUsd);
 
+    // Keep the higher side between local and external to avoid downward drift.
     merged.byTool.codex.totalTokens = Math.max(
       Math.round(Number(merged.byTool.codex.totalTokens || 0)),
       externalTokensWithLive

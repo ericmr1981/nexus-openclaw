@@ -64,6 +64,40 @@ run('applyExternalUsageOverrides replaces claude/codex totals only', () => {
   assert.equal(merged.totals.totalCostUsd, 20.75);
 });
 
+run('applyExternalUsageOverrides keeps higher local totals when external is lower', () => {
+  const base = {
+    scope: 'all_history',
+    totals: {
+      runningAgents: 2,
+      totalTokens: 3000,
+      totalCostUsd: 300
+    },
+    byTool: {
+      codex: { totalTokens: 1400, totalCostUsd: 140, runningAgents: 1 },
+      'claude-code': { totalTokens: 1200, totalCostUsd: 120, runningAgents: 1 },
+      openclaw: { totalTokens: 400, totalCostUsd: 40, runningAgents: 0 }
+    },
+    backfill: { status: 'done', scannedFiles: 1, totalFiles: 1 },
+    updatedAt: 123
+  };
+
+  ExternalUsageService.__setExternalUsageForTests({
+    claudeCode: { totalTokens: 900, totalCostUsd: 9.5, source: 'ccusage' },
+    codex: { totalTokens: 800, totalCostUsd: 8.25, source: '@ccusage/codex' },
+    updatedAt: 456
+  });
+
+  const merged = ExternalUsageService.applyExternalUsageOverrides(base);
+  assert.equal(merged.byTool['claude-code'].totalTokens, 1200);
+  assert.equal(merged.byTool['claude-code'].totalCostUsd, 120);
+  assert.equal(merged.byTool.codex.totalTokens, 1400);
+  assert.equal(merged.byTool.codex.totalCostUsd, 140);
+  assert.equal(merged.byTool.openclaw.totalTokens, 400);
+  assert.equal(merged.byTool.openclaw.totalCostUsd, 40);
+  assert.equal(merged.totals.totalTokens, 3000);
+  assert.equal(merged.totals.totalCostUsd, 300);
+});
+
 run('live overlay baseline does not reset when only external updatedAt changes', () => {
   const base = {
     scope: 'all_history',

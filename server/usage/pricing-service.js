@@ -71,7 +71,10 @@ const FALLBACK_PRICING = {
   }
 };
 
-let pricingTable = normalizePricingTable(FALLBACK_PRICING);
+const FALLBACK_PRICING_TABLE = normalizePricingTable(FALLBACK_PRICING);
+const SMALL_CACHE_MODEL_THRESHOLD = 8;
+
+let pricingTable = new Map(FALLBACK_PRICING_TABLE);
 let lastFetchedAt = 0;
 let refreshPromise = null;
 
@@ -191,6 +194,19 @@ function normalizePricingTable(data) {
   return table;
 }
 
+function mergeWithFallback(table) {
+  const merged = new Map(FALLBACK_PRICING_TABLE);
+  if (!table || typeof table.entries !== 'function') return merged;
+  for (const [model, entry] of table.entries()) {
+    merged.set(model, entry);
+  }
+  return merged;
+}
+
+function isSuspiciouslySmallTable(table) {
+  return !table || table.size < SMALL_CACHE_MODEL_THRESHOLD;
+}
+
 function getModelAliases(modelName) {
   const raw = String(modelName || '').trim().toLowerCase();
   if (!raw) return [];
@@ -205,9 +221,14 @@ function getModelAliases(modelName) {
     queue.push(normalized);
   };
 
-  add(raw);
-  for (const prefix of PROVIDER_PREFIXES) {
-    add(`${prefix}${raw}`);
+  if (raw.includes('/')) {
+    add(raw);
+  } else {
+    // Prefer provider-qualified entries first when both provider and fallback aliases exist.
+    for (const prefix of PROVIDER_PREFIXES) {
+      add(`${prefix}${raw}`);
+    }
+    add(raw);
   }
 
   // Provider-prefixed model names like "anthropic/claude-opus-4-6".
@@ -334,7 +355,10 @@ export function calculateCostBreakdown(modelName, tokens = {}) {
     cacheWriteTokens
   } = normalizedTokens;
 
-  const inputUsd = (inputTokens * pricing.inputPerMillion) / 1_000_000;
+  // `cachedInputTokens` is a subset of input tokens for Codex-like usage payloads.
+  // Charge regular input rate only for non-cached portion to avoid double counting.
+  const billableInputTokens = Math.max(inputTokens - cachedInputTokens, 0);
+  const inputUsd = (billableInputTokens * pricing.inputPerMillion) / 1_000_000;
   const outputUsd = (outputTokens * pricing.outputPerMillion) / 1_000_000;
 
   const cachedInputRate = pricing.cachedInputPerMillion || pricing.cacheReadPerMillion || 0;
@@ -401,12 +425,12 @@ export async function refreshPricingInBackground({ force = false } = {}) {
     if (!remote) {
       const cached = readCache();
       if (!cached || cached.table.size === 0) return false;
-      pricingTable = cached.table;
+      pricingTable = mergeWithFallback(cached.table);
       lastFetchedAt = cached.fetchedAt;
       return true;
     }
 
-    pricingTable = remote.table;
+    pricingTable = mergeWithFallback(remote.table);
     lastFetchedAt = remote.fetchedAt;
     writeCache(pricingTable, lastFetchedAt);
     return true;
@@ -421,16 +445,21 @@ export async function refreshPricingInBackground({ force = false } = {}) {
 
 export async function initPricingService() {
   const cached = readCache();
+  let shouldForceRefresh = false;
+
   if (cached && cached.table.size > 0) {
-    pricingTable = cached.table;
+    pricingTable = mergeWithFallback(cached.table);
     lastFetchedAt = cached.fetchedAt;
+    shouldForceRefresh = isSuspiciouslySmallTable(cached.table);
+  } else {
+    pricingTable = new Map(FALLBACK_PRICING_TABLE);
   }
 
-  refreshPricingInBackground().catch(() => {});
+  refreshPricingInBackground({ force: shouldForceRefresh }).catch(() => {});
 }
 
 export function __resetForTests() {
-  pricingTable = normalizePricingTable(FALLBACK_PRICING);
+  pricingTable = new Map(FALLBACK_PRICING_TABLE);
   lastFetchedAt = 0;
   refreshPromise = null;
 }

@@ -65,7 +65,7 @@ function terminateIfMatch(port, matcher, repoRoot) {
 }
 
 const repoRoot = process.cwd();
-const killedBackend = terminateIfMatch(3000, isLikelyNexusBackend, repoRoot);
+const killedBackend = terminateIfMatch(7878, isLikelyNexusBackend, repoRoot);
 const killedFrontend = terminateIfMatch(5173, isLikelyNexusVite, repoRoot);
 
 if (killedBackend.length > 0 || killedFrontend.length > 0) {

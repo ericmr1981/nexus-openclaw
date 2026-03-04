@@ -6,6 +6,26 @@ import * as PricingService from '../server/usage/pricing-service.js';
 
 let passed = 0;
 let failed = 0;
+const PRICING_CACHE_PATH = path.join(process.cwd(), '.nexus-runtime', 'pricing-cache.json');
+
+function snapshotPricingCache() {
+  if (!fs.existsSync(PRICING_CACHE_PATH)) {
+    return { exists: false, content: null };
+  }
+  return {
+    exists: true,
+    content: fs.readFileSync(PRICING_CACHE_PATH, 'utf-8')
+  };
+}
+
+function restorePricingCache(snapshot) {
+  if (!snapshot || !snapshot.exists) {
+    fs.rmSync(PRICING_CACHE_PATH, { force: true });
+    return;
+  }
+  fs.mkdirSync(path.dirname(PRICING_CACHE_PATH), { recursive: true });
+  fs.writeFileSync(PRICING_CACHE_PATH, snapshot.content);
+}
 
 function pass(name) {
   passed += 1;
@@ -29,12 +49,15 @@ function run(name, fn) {
 }
 
 async function runAsync(name, fn) {
+  const cacheSnapshot = snapshotPricingCache();
   try {
     PricingService.__resetForTests();
     await fn();
     pass(name);
   } catch (error) {
     fail(name, error);
+  } finally {
+    restorePricingCache(cacheSnapshot);
   }
 }
 
@@ -95,6 +118,22 @@ run('calculateCostBreakdown returns rates and component totals', () => {
   assert.equal(typeof breakdown.componentsUsd.inputUsd, 'number');
 });
 
+run('calculateCostBreakdown avoids cached-input double charge', () => {
+  const breakdown = PricingService.calculateCostBreakdown('gpt-5-codex', {
+    inputTokens: 1_000_000,
+    outputTokens: 100_000,
+    cachedInputTokens: 200_000
+  });
+
+  assert.equal(Boolean(breakdown), true);
+  // input: (1_000_000 - 200_000) * 1.25 / 1e6 = 1.0
+  assert.equal(Math.abs(breakdown.componentsUsd.inputUsd - 1.0) < 1e-9, true);
+  // cached input: 200_000 * 0.125 / 1e6 = 0.025
+  assert.equal(Math.abs(breakdown.componentsUsd.cachedInputUsd - 0.025) < 1e-9, true);
+  // output: 100_000 * 10 / 1e6 = 1.0; total = 2.025
+  assert.equal(Math.abs(breakdown.totalCostUsd - 2.025) < 1e-9, true);
+});
+
 await runAsync('refreshPricingInBackground accepts LiteLLM token-cost fields', async () => {
   const originalFetch = global.fetch;
   global.fetch = async () => ({
@@ -124,8 +163,35 @@ await runAsync('refreshPricingInBackground accepts LiteLLM token-cost fields', a
   }
 });
 
+await runAsync('refreshPricingInBackground keeps fallback entries with partial remote dataset', async () => {
+  const originalFetch = global.fetch;
+  global.fetch = async () => ({
+    ok: true,
+    json: async () => ({
+      'openai/gpt-5-codex': {
+        input_cost_per_token: 1.25e-6,
+        output_cost_per_token: 1e-5,
+        cache_read_input_token_cost: 1.25e-7,
+        cache_creation_input_token_cost: 1.25e-6
+      }
+    })
+  });
+
+  try {
+    await PricingService.refreshPricingInBackground({ force: true });
+    const codexPricing = PricingService.getModelPricing('gpt-5-codex');
+    const claudePricing = PricingService.getModelPricing('claude-opus-4-6');
+    assert.equal(Boolean(codexPricing), true);
+    assert.equal(Boolean(claudePricing), true);
+    assert.equal(claudePricing.inputPerMillion, 15);
+    assert.equal(claudePricing.outputPerMillion, 75);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
 await runAsync('refreshPricingInBackground falls back to local cache when fetch fails', async () => {
-  const cachePath = path.join(process.cwd(), '.nexus-runtime', 'pricing-cache.json');
+  const cachePath = PRICING_CACHE_PATH;
   const cacheDir = path.dirname(cachePath);
   const hadCache = fs.existsSync(cachePath);
   const originalCache = hadCache ? fs.readFileSync(cachePath, 'utf-8') : null;
