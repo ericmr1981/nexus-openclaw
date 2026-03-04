@@ -101,9 +101,9 @@ start_prod() {
   local pid=$!
   echo "$pid" >"$PROD_PID_FILE"
 
-  if wait_for_port 3000; then
+  if wait_for_port 7878; then
     echo "[nexus] Started (pid=$pid)"
-    echo "[nexus] Open: http://localhost:3000"
+    echo "[nexus] Open: http://localhost:7878"
     return 0
   fi
 
@@ -130,7 +130,7 @@ start_dev() {
   local backend_pid=$!
   echo "$backend_pid" >"$BACKEND_PID_FILE"
 
-  if ! wait_for_port 3000; then
+  if ! wait_for_port 7878; then
     echo "[nexus] Backend failed to start, check logs: $BACKEND_LOG" >&2
     return 1
   fi
@@ -143,7 +143,7 @@ start_dev() {
   if wait_for_port 5173; then
     echo "[nexus] Dev started"
     echo "[nexus] Frontend: http://localhost:5173"
-    echo "[nexus] Backend:  http://localhost:3000"
+    echo "[nexus] Backend:  http://localhost:7878"
     return 0
   fi
 

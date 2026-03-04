@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Local nexus command wrapper
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec "$SCRIPT_DIR/scripts/nexusctl.sh" "$@"

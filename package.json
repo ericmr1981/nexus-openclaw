@@ -5,7 +5,10 @@
   "main": "server/index.js",
   "type": "module",
   "scripts": {
-    "start": "node server/index.js",
+    "start": "bash scripts/nexusctl.sh start",
+    "stop": "bash scripts/nexusctl.sh stop",
+    "restart": "bash scripts/nexusctl.sh restart",
+    "status": "bash scripts/nexusctl.sh status",
     "dev": "node server/index.js",
     "dev:backend": "node scripts/dev-backend.js",
     "client": "cd client && npm run dev",

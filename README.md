@@ -2,34 +2,34 @@
 
 实时监控本地 AI Agent 会话（Claude Code / Codex / OpenClaw），并在前端实时展示会话流与聚合 Token / USD 用量。
 
-## 一键安装（面向使用者）
+## 快速启动
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lusya123/Nexus/main/install.sh | bash
+npm start
 ```
 
-安装后可直接使用：
+访问 **http://localhost:7878** 即可使用。
+
+其他命令：
 
 ```bash
-nexus start      # 生产模式（后台运行，服务端口 3000）
-nexus stop
-nexus restart
-nexus status
-nexus logs prod
+npm stop           # 停止服务
+npm restart        # 重启服务
+npm run status     # 查看运行状态
 ```
 
-## 本地开发（面向调试）
+---
+
+## 开发者模式
+
+前后端分离运行，支持热重载：
 
 ```bash
-nexus dev-start
-nexus dev-stop
-nexus dev-restart
-nexus logs backend
-nexus logs frontend
+npm run dev:all
 ```
 
-- 开发模式前端：`http://localhost:5173`
-- 后端 / 生产模式：`http://localhost:3000`
+- 前端：http://localhost:5173
+- 后端：http://localhost:7878
 
 ## 当前后端行为（以 `server/index.js` 为准）
 

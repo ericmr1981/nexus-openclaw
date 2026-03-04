@@ -21,7 +21,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const PORT = 3000;
+const PORT = 7878;
 
 function normalizeHistoryLimit(raw, fallback = 200, max = 2000) {
   const n = Number(raw);
