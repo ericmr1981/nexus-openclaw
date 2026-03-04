@@ -8,17 +8,17 @@ nexus status
 
 常见端口：
 
-- 生产模式：`3000`
+- 生产模式：`7878`
 - 开发模式前端：`5173`
 
 ## 1. WebSocket 显示 disconnected
 
 排查顺序：
 
-1. 后端是否监听 3000：
+1. 后端是否监听 7878：
 
 ```bash
-lsof -nP -iTCP:3000 -sTCP:LISTEN
+lsof -nP -iTCP:7878 -sTCP:LISTEN
 ```
 
 2. 使用控制脚本查看日志：
@@ -159,12 +159,12 @@ LOG_LEVEL=DEBUG node server/index.js
 
 ## 8. 常见错误
 
-### `EADDRINUSE: address already in use :::3000`
+### `EADDRINUSE: address already in use :::7878`
 
 端口被占用。先定位占用进程再停止：
 
 ```bash
-lsof -nP -iTCP:3000 -sTCP:LISTEN
+lsof -nP -iTCP:7878 -sTCP:LISTEN
 ```
 
 ### `ENOENT`（文件不存在）
@@ -173,7 +173,7 @@ lsof -nP -iTCP:3000 -sTCP:LISTEN
 
 ### WebSocket 连接失败
 
-确认你连接的是后端端口 `ws://localhost:3000`，并确保后端正在运行。
+确认你连接的是后端端口 `ws://localhost:7878`，并确保后端正在运行。
 
 ## 9. 仍无法定位
 

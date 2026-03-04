@@ -22,7 +22,7 @@ echo "🚀 启动服务..."
 echo ""
 
 # 启动后端
-echo "启动后端服务器 (http://localhost:3000)..."
+echo "启动后端服务器 (http://localhost:7878)..."
 node server/index.js > /tmp/nexus-server.log 2>&1 &
 SERVER_PID=$!
 
@@ -41,7 +41,7 @@ echo "✅ 服务启动成功！"
 echo ""
 echo "📊 访问地址："
 echo "   前端应用: http://localhost:5173"
-echo "   后端 API: http://localhost:3000"
+echo "   后端 API: http://localhost:7878"
 echo ""
 echo "📝 日志文件："
 echo "   后端: /tmp/nexus-server.log"

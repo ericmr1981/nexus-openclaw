@@ -459,7 +459,7 @@ function readIncremental(filePath) {
 
 **测试步骤**：
 1. 启动服务端：`node server/index.js`
-2. 浏览器访问 `http://localhost:3000`（或配置的端口）
+2. 浏览器访问 `http://localhost:7878`（或配置的端口）
 3. 打开浏览器开发者工具，查看 WebSocket 连接状态
 4. 验证 WebSocket 连接成功建立
 

@@ -160,7 +160,7 @@ export function useSessionsStream() {
         reconnectTimerRef.current = null;
       }
 
-      const ws = new WebSocket('ws://localhost:3000');
+      const ws = new WebSocket('ws://localhost:7878');
       wsRef.current = ws;
 
       ws.onopen = () => {

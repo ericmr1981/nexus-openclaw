@@ -2,11 +2,11 @@
 
 ## 1. WebSocket
 
-- 地址：`ws://localhost:3000`
+- 地址：`ws://localhost:7878`
 - 连接建立后，服务端会先发送 `init` 全量快照。
 
 ```js
-const ws = new WebSocket('ws://localhost:3000');
+const ws = new WebSocket('ws://localhost:7878');
 ```
 
 ## 2. 消息类型

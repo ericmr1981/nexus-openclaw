@@ -22,7 +22,7 @@ nexus dev-start
 
 该命令会同时启动：
 
-- 后端：`http://localhost:3000`
+- 后端：`http://localhost:7878`
 - 前端：`http://localhost:5173`
 
 ## 生产构建

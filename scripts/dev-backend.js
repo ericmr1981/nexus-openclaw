@@ -22,7 +22,7 @@ function getProcessCwd(pid) {
 }
 
 const repoRoot = process.cwd();
-const PORT = 3000;
+const PORT = 7878;
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));

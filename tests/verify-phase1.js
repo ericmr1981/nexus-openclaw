@@ -7,7 +7,7 @@ console.log('Nexus Phase 1 - Final Verification');
 console.log('='.repeat(60));
 console.log('');
 
-const ws = new WebSocket('ws://localhost:3000');
+const ws = new WebSocket('ws://localhost:7878');
 
 let testsPassed = 0;
 let testsFailed = 0;
