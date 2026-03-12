@@ -193,7 +193,9 @@ export function useSessionsStream() {
         reconnectTimerRef.current = null;
       }
 
-      const ws = new WebSocket('ws://localhost:7878');
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = `${protocol}//${window.location.host}`;
+      const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
       ws.onopen = () => {
