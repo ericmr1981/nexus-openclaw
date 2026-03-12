@@ -1092,7 +1092,7 @@ async function checkProcesses() {
 }
 
 // Start server
-server.listen(PORT, '127.0.0.1', async () => {
+server.listen(PORT, '0.0.0.0', async () => {
   logger.serverStarted(PORT, 0);
 
   await PricingService.initPricingService();
