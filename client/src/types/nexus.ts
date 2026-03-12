@@ -22,6 +22,10 @@ export interface Session {
   sessionId: string;
   tool: string;
   name: string;
+  /** For OpenClaw: agent folder name under ~/.openclaw/agents/<agentId>/... */
+  agentId?: string | null;
+  /** Most recently observed model for the session (best-effort). */
+  model?: string | null;
   messages: Message[];
   state: 'active' | 'idle' | 'cooling' | 'gone';
   lastModified: number;
@@ -80,6 +84,8 @@ export interface ServerMessage {
   sessionId?: string;
   tool?: string;
   name?: string;
+  agentId?: string | null;
+  model?: string | null;
   state?: Session['state'];
   lastModified?: number;
   message?: Message;

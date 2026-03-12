@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Agent ID Debug</title>
+    <style>
+        body { font-family: monospace; padding: 20px; }
+        .card { margin: 10px 0; padding: 10px; border: 1px solid #ccc; }
+        .badge { background: #007bff; color: white; padding: 2px 8px; border-radius: 4px; margin-right: 5px; }
+    </style>
+</head>
+<body>
+    <h1>Agent ID Debug Tool</h1>
+    <div id="status">Connecting...</div>
+    <div id="sessions"></div>
+
+    <script>
+        const ws = new WebSocket('ws://localhost:7878');
+        const statusDiv = document.getElementById('status');
+        const sessionsDiv = document.getElementById('sessions');
+
+        ws.onopen = () => {
+            statusDiv.textContent = 'Connected to WebSocket';
+        };
+
+        ws.onmessage = (event) => {
+            const message = JSON.parse(event.data);
+
+            if (message.type === 'init') {
+                statusDiv.textContent = `Received init with ${message.sessions?.length || 0} sessions`;
+                renderSessions(message.sessions || []);
+            } else if (message.type === 'session_init') {
+                statusDiv.textContent = `New session: ${message.name} (agentId: ${message.agentId})`;
+                addSession(message);
+            } else if (message.type === 'session_update') {
+                console.log('Session update:', message);
+            }
+        };
+
+        function renderSessions(sessions) {
+            sessionsDiv.innerHTML = '';
+            sessions.forEach((session, idx) => {
+                renderSession(session, idx);
+            });
+        }
+
+        function addSession(session) {
+            renderSession(session, document.querySelectorAll('.card').length);
+        }
+
+        function renderSession(session, idx) {
+            const card = document.createElement('div');
+            card.className = 'card';
+
+            const agentIdBadge = session.agentId
+                ? `<span class="badge">agentId: ${session.agentId}</span>`
+                : '<span style="color: red; margin-right: 5px;">NO AGENT ID</span>';
+
+            const modelBadge = session.model
+                ? `<span class="badge">model: ${session.model}</span>`
+                : '';
+
+            card.innerHTML = `
+                <strong>${idx + 1}. ${session.name}</strong> (${session.tool})<br>
+                Session ID: ${session.sessionId?.substring(0, 8)}...<br>
+                ${agentIdBadge}${modelBadge}
+            `;
+
+            sessionsDiv.appendChild(card);
+        }
+
+        ws.onerror = (error) => {
+            statusDiv.textContent = 'WebSocket error: ' + error;
+            console.error('WebSocket error:', error);
+        };
+
+        ws.onclose = () => {
+            statusDiv.textContent = 'WebSocket closed';
+        };
+    </script>
+</body>
+</html>

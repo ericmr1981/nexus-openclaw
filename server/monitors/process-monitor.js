@@ -9,6 +9,38 @@ const PROCESS_SCAN_MAX_BUFFER = 1024 * 1024;
 // Track active processes (PID -> project directory)
 const activeProcesses = new Map();
 
+let _hasLsof = null;
+let _lsofPath = '';
+async function hasLsof() {
+  if (_hasLsof !== null) return _hasLsof;
+
+  const out = await runCommand('command -v lsof');
+  const found = String(out || '').trim();
+  if (found) {
+    _hasLsof = true;
+    _lsofPath = found;
+    console.log(`[ProcessMonitor] lsof available: true (path=${_lsofPath})`);
+    return _hasLsof;
+  }
+
+  // macOS often ships lsof in /usr/sbin, which may not be on PATH for non-login shells.
+  const { existsSync } = await import('fs');
+  if (existsSync('/usr/sbin/lsof')) {
+    _hasLsof = true;
+    _lsofPath = '/usr/sbin/lsof';
+  } else if (existsSync('/usr/bin/lsof')) {
+    _hasLsof = true;
+    _lsofPath = '/usr/bin/lsof';
+  } else {
+    _hasLsof = false;
+    _lsofPath = '';
+  }
+
+  console.log(`[ProcessMonitor] lsof available: ${_hasLsof} (path=${_lsofPath || 'n/a'})`);
+  return _hasLsof;
+}
+
+
 function isUnderDir(child, parent) {
   const rel = path.relative(path.resolve(parent), path.resolve(child));
   return rel && !rel.startsWith('..') && !path.isAbsolute(rel);
@@ -85,17 +117,26 @@ export async function scanProcesses(toolName, projectsDir, encodeCwdFn) {
 
       try {
         // Read cwd using lsof -Fn to avoid grep pipes and keep timeout control.
-        const lsofCwdOutput = await runCommand(`lsof -a -p ${pid} -d cwd -Fn 2>/dev/null`);
-        const cwd = parseCwdFromLsofFn(lsofCwdOutput);
-        if (!cwd) continue;
+        let cwd = '';
+        if (await hasLsof()) {
+          const lsofCwdOutput = await runCommand(`lsof -a -p ${pid} -d cwd -Fn 2>/dev/null`);
+          cwd = parseCwdFromLsofFn(lsofCwdOutput) || '';
+        }
 
-        const encodedCwd = encodeCwdFn(cwd);
-        const projectDir = path.resolve(path.join(projectsDir, encodedCwd));
+        // If we can't determine cwd (e.g., lsof missing), still count the process
+        // but skip projectDir/sessionFiles linkage.
+        let projectDir = undefined;
+        if (cwd) {
+          const encodedCwd = encodeCwdFn(cwd);
+          projectDir = path.resolve(path.join(projectsDir, encodedCwd));
+        }
 
         let sessionFiles = [];
-        const lsofNames = await runCommand(`lsof -p ${pid} -Fn 2>/dev/null`);
-        if (lsofNames) {
-          sessionFiles = extractOpenJsonlFilesFromLsof(lsofNames, { restrictUnderDir: projectDir });
+        if (projectDir && (await hasLsof())) {
+          const lsofNames = await runCommand(`lsof -p ${pid} -Fn 2>/dev/null`);
+          if (lsofNames) {
+            sessionFiles = extractOpenJsonlFilesFromLsof(lsofNames, { restrictUnderDir: projectDir });
+          }
         }
 
         newProcesses.set(pid, { cwd, projectDir, toolName, sessionFiles });
@@ -145,7 +186,7 @@ export async function scanProcesses(toolName, projectsDir, encodeCwdFn) {
 export function getActiveProjectDirs() {
   const activeProjectDirs = new Set();
   for (const [, info] of activeProcesses.entries()) {
-    activeProjectDirs.add(info.projectDir);
+    if (info.projectDir) activeProjectDirs.add(info.projectDir);
   }
   return activeProjectDirs;
 }

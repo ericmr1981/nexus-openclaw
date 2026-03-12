@@ -25,13 +25,21 @@
     "test:usage-parsers": "node tests/usage-parsers-regression.js",
     "test:usage-manager": "node tests/usage-manager-regression.js",
     "test:pricing-stability": "node tests/pricing-stability-deep-regression.js",
+    "test:unit": "node tests/unit/server.test.js && node tests/unit/edge-cases.test.js",
+    "test:integration": "node tests/integration/websocket.test.js",
+    "test:all": "npm run test:unit && npm run test:integration && npm run test:codex && npm run test:usage-parsers && npm run test:usage-manager && npm run test:pricing-stability",
     "test": "node tests/verify-phase1.js"
   },
   "dependencies": {
+    "cors": "^2.8.6",
+    "cron-parser": "^5.5.0",
+    "date-fns": "^4.1.0",
     "express": "^4.18.2",
+    "react-router-dom": "^7.13.1",
     "ws": "^8.14.2"
   },
   "devDependencies": {
+    "@playwright/test": "^1.58.2",
     "concurrently": "^9.2.1",
     "puppeteer": "^24.37.3"
   }

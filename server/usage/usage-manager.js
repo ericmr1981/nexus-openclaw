@@ -1,5 +1,11 @@
 import * as CostHistoryStore from './cost-history-store.js';
 
+// Initialize the usage manager
+export function init() {
+  // Reset or initialize state if needed
+  return true;
+}
+
 const usageSessions = new Map();
 const liveSessions = new Map();
 const usageDaily = new Map();
@@ -394,14 +400,19 @@ function appendSessionCostHistory(session, event, pricingMeta, calculateCostBrea
   });
 }
 
-export function ingestUsageEvent({
-  sessionId,
-  tool,
-  event,
-  calculateCostUsd,
-  calculateCostBreakdown = null,
-  getPricingMeta = null
-}) {
+export function ingestUsageEvent(rawParams) {
+  // Handle null/undefined input gracefully
+  if (!rawParams || typeof rawParams !== 'object') return false;
+
+  const {
+    sessionId,
+    tool,
+    event,
+    calculateCostUsd,
+    calculateCostBreakdown = null,
+    getPricingMeta = null
+  } = rawParams;
+
   if (!sessionId || !tool || !event || typeof event !== 'object') return false;
 
   const session = ensureUsageSession(sessionId, tool);

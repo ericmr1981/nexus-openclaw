@@ -2,6 +2,9 @@
 
 set -euo pipefail
 
+# Ensure common system binaries are available (macOS lsof often lives in /usr/sbin)
+export PATH="/usr/sbin:/usr/bin:/bin:/opt/homebrew/bin:$PATH"
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEFAULT_STATE_DIR="${NEXUS_STATE_DIR:-$HOME/.nexus}"
 STATE_DIR="$DEFAULT_STATE_DIR"

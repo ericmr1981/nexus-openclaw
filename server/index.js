@@ -1,8 +1,11 @@
 import express from 'express';
 import { createServer } from 'http';
+import cors from 'cors';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
+import os from 'os';
+import { spawn } from 'child_process';
 
 // Import modules
 import { initWebSocket, broadcast } from './websocket.js';
@@ -15,6 +18,7 @@ import * as SessionManager from './session-manager.js';
 import * as UsageManager from './usage/usage-manager.js';
 import * as PricingService from './usage/pricing-service.js';
 import * as ExternalUsageService from './usage/external-usage-service.js';
+import * as ScheduledTasks from './scheduled-tasks.js';
 import { logger, sessionLogger, fileLogger, processLogger } from './utils/logger.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -22,6 +26,15 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = 7878;
+
+// Middleware to parse JSON bodies
+app.use(express.json());
+
+// Enable CORS for all routes to allow frontend communication
+app.use(cors({
+  origin: ['http://localhost:5173', 'http://localhost:7878'], // Vite dev server and production
+  credentials: true
+}));
 
 function normalizeHistoryLimit(raw, fallback = 200, max = 2000) {
   const n = Number(raw);
@@ -51,8 +64,473 @@ app.get('/api/usage/cost-history', (req, res) => {
   }
 });
 
+// System metrics API endpoint
+app.get('/api/system/metrics', (req, res) => {
+  try {
+    // Get memory usage
+    const memoryUsage = process.memoryUsage();
+    const totalMemory = os.totalmem();
+    const freeMemory = os.freemem();
+    const usedMemory = totalMemory - freeMemory;
+    const memoryPercentage = ((usedMemory / totalMemory) * 100).toFixed(1);
+
+    // Get CPU usage (average over all cores)
+    const cpus = os.cpus();
+    let totalIdle = 0;
+    let totalTick = 0;
+
+    cpus.forEach(cpu => {
+      for (let type in cpu.times) {
+        totalTick += cpu.times[type];
+      }
+      totalIdle += cpu.times.idle;
+    });
+
+    const totalUsage = totalTick - totalIdle;
+    const cpuPercentage = ((totalUsage / totalTick) * 100).toFixed(1);
+
+    res.json({
+      cpu: {
+        percentage: parseFloat(cpuPercentage),
+        cores: cpus.length
+      },
+      memory: {
+        percentage: parseFloat(memoryPercentage),
+        used: Math.round(usedMemory / 1024 / 1024), // MB
+        total: Math.round(totalMemory / 1024 / 1024), // MB
+        process: {
+          heapUsed: Math.round(memoryUsage.heapUsed / 1024 / 1024), // MB
+          heapTotal: Math.round(memoryUsage.heapTotal / 1024 / 1024), // MB
+          rss: Math.round(memoryUsage.rss / 1024 / 1024) // MB
+        }
+      }
+    });
+  } catch (error) {
+    logger.error('System metrics query failed', { error: error?.message || String(error) });
+    res.status(500).json({
+      error: 'system_metrics_query_failed'
+    });
+  }
+});
+
+// Scheduled tasks API endpoints
+app.get('/api/scheduled-tasks', (req, res) => {
+  try {
+    const tasks = ScheduledTasks.getAllScheduledJobsWithMetadata();
+    res.json({
+      tasks
+    });
+  } catch (error) {
+    logger.error('Scheduled tasks query failed', { error: error?.message || String(error) });
+    res.status(500).json({
+      error: 'scheduled_tasks_query_failed'
+    });
+  }
+});
+
+// OpenClaw Proxy API endpoints
+let openclawProxyProcesses = new Map(); // Store running proxy processes
+let openclawProxyLogFiles = new Map(); // Store log file paths for each proxy
+
+app.post('/api/openclaw-proxy/start', (req, res) => {
+  try {
+    const { sessionId, logDir = './logs' } = req.body;
+
+    if (!sessionId) {
+      return res.status(400).json({
+        error: 'sessionId is required'
+      });
+    }
+
+    // Try to find the OpenClaw session to get the WebSocket URI (optional - will use default if not found)
+    const session = SessionManager.getSession(sessionId);
+    const isOpenClawSession = session && session.tool && session.tool.toLowerCase().includes('openclaw');
+
+    // Determine the WebSocket URI - use default or from session metadata
+    const wsUri = (session && session.metadata?.webSocketUri) || 'ws://127.0.0.1:18789';
+
+    // Check if a proxy is already running for this session
+    if (openclawProxyProcesses.has(sessionId)) {
+      return res.status(409).json({
+        error: 'Proxy already running for this session'
+      });
+    }
+
+    // Create log directory if it doesn't exist
+    if (!fs.existsSync(logDir)) {
+      fs.mkdirSync(logDir, { recursive: true });
+    }
+
+    // Prepare command arguments for the Python proxy
+    const proxyArgs = [
+      path.join(__dirname, '..', 'openclaw-proxy', 'cli.py'),
+      wsUri,
+      '--log-dir', logDir
+    ];
+
+    // Add authentication token - use from session metadata, env var, or default token
+    const authToken = (session && session.metadata?.authToken) || process.env.OPENCLAW_TOKEN || 'fd1c17fa9248e8063d232fdb740cdf3cda6def736e3c9e35';
+    proxyArgs.push('--token', authToken);
+
+    // Add verbose flag if needed (for debugging)
+    if (process.env.NODE_ENV === 'development') {
+      proxyArgs.push('--verbose');
+    }
+
+    // Spawn the OpenClaw proxy process
+    const proxyProcess = spawn('python3', proxyArgs, {
+      cwd: path.join(__dirname, '..'),
+      env: { ...process.env }
+    });
+
+    // Store the process reference
+    openclawProxyProcesses.set(sessionId, proxyProcess);
+
+    // Generate fallback log file path (in case proxy doesn't output in time)
+    const timestamp = new Date().toISOString().replace(/[-:.]/g, '').replace('T', '_').split('.')[0];
+    const fallbackLogFilePath = path.join(logDir, `session_${timestamp}.jsonl`);
+
+    let responseSent = false;
+
+    // Handle stderr to capture LOG_FILE: message and send response (proxy uses stderr for immediate output)
+    const handleStderr = (data) => {
+      const output = data.toString();
+      console.log('[DEBUG] Proxy stderr received:', output);  // Debug logging
+
+      if (responseSent) return;
+
+      const lines = output.split('\n');
+      for (const line of lines) {
+        if (line.startsWith('LOG_FILE:')) {
+          console.log('[DEBUG] Found LOG_FILE in stderr!');  // Debug
+          const actualLogFilePath = line.substring('LOG_FILE:'.length).trim();
+          // Convert to relative path for API consistency
+          const relativePath = actualLogFilePath.replace(process.cwd() + '/', '');
+
+          openclawProxyLogFiles.set(sessionId, relativePath);
+
+          res.json({
+            success: true,
+            sessionId,
+            logFile: relativePath,
+            wsUri,
+            message: 'OpenClaw proxy started successfully'
+          });
+          responseSent = true;
+          break;
+        }
+      }
+    };
+
+    proxyProcess.stderr?.on('data', handleStderr);
+
+    // Also log stderr errors for debugging
+    proxyProcess.stderr?.on('data', (data) => {
+      const output = data.toString();
+      if (!output.startsWith('LOG_FILE:')) {
+        logger.error(`OpenClaw proxy error for ${sessionId}`, { error: output });
+      }
+    });
+
+    proxyProcess.on('error', (err) => {
+      logger.error('OpenClaw proxy process error', { sessionId, error: err.message });
+      openclawProxyProcesses.delete(sessionId);
+      openclawProxyLogFiles.delete(sessionId);
+      if (!responseSent) {
+        res.status(500).json({ error: 'failed_to_start_openclaw_proxy' });
+        responseSent = true;
+      }
+    });
+
+    proxyProcess.on('close', (code) => {
+      logger.info('OpenClaw proxy process closed', { sessionId, code });
+      openclawProxyProcesses.delete(sessionId);
+      openclawProxyLogFiles.delete(sessionId);
+    });
+
+    // Set timeout - if we don't get log file path within 3 seconds, use fallback
+    setTimeout(() => {
+      if (!responseSent) {
+        openclawProxyLogFiles.set(sessionId, fallbackLogFilePath);
+        res.json({
+          success: true,
+          sessionId,
+          logFile: fallbackLogFilePath,
+          wsUri,
+          message: 'OpenClaw proxy started successfully'
+        });
+        responseSent = true;
+      }
+    }, 3000);
+
+  } catch (error) {
+    logger.error('Failed to start OpenClaw proxy', { error: error?.message || String(error) });
+    res.status(500).json({
+      error: 'failed_to_start_openclaw_proxy'
+    });
+  }
+});
+
+app.post('/api/openclaw-proxy/stop', (req, res) => {
+  try {
+    const { sessionId } = req.body;
+
+    if (!sessionId) {
+      return res.status(400).json({
+        error: 'sessionId is required'
+      });
+    }
+
+    const proxyProcess = openclawProxyProcesses.get(sessionId);
+    if (!proxyProcess) {
+      return res.status(404).json({
+        error: 'No running proxy found for this session'
+      });
+    }
+
+    // Kill the proxy process
+    proxyProcess.kill('SIGTERM');
+
+    // Clean up references
+    openclawProxyProcesses.delete(sessionId);
+    openclawProxyLogFiles.delete(sessionId);
+
+    res.json({
+      success: true,
+      sessionId,
+      message: 'OpenClaw proxy stopped successfully'
+    });
+
+  } catch (error) {
+    logger.error('Failed to stop OpenClaw proxy', { error: error?.message || String(error) });
+    res.status(500).json({
+      error: 'failed_to_stop_openclaw_proxy'
+    });
+  }
+});
+
+app.get('/api/openclaw-proxy/logs', (req, res) => {
+  try {
+    const { path: logPath } = req.query;
+
+    if (!logPath) {
+      return res.status(400).json({
+        error: 'path parameter is required'
+      });
+    }
+
+    // Validate that the path is within allowed directories to prevent directory traversal
+    const resolvedPath = path.resolve(logPath);
+    const allowedDir = path.resolve('./logs');
+    if (!resolvedPath.startsWith(allowedDir)) {
+      return res.status(403).json({
+        error: 'Invalid log path'
+      });
+    }
+
+    if (!fs.existsSync(resolvedPath)) {
+      return res.status(404).json({
+        error: 'Log file not found'
+      });
+    }
+
+    // Read the log file
+    const content = fs.readFileSync(resolvedPath, 'utf-8');
+    const lines = content.split('\n').filter(line => line.trim() !== '');
+
+    // Parse JSON lines
+    const logs = lines.map(line => {
+      try {
+        return JSON.parse(line);
+      } catch (e) {
+        return { error: 'Failed to parse log line', content: line };
+      }
+    });
+
+    res.json({
+      logs,
+      count: logs.length
+    });
+
+  } catch (error) {
+    logger.error('Failed to read OpenClaw proxy logs', { error: error?.message || String(error) });
+    res.status(500).json({
+      error: 'failed_to_read_openclaw_logs'
+    });
+  }
+});
+
+app.get('/api/openclaw-proxy/status', (req, res) => {
+  try {
+    const activeProxies = [];
+    for (const [sessionId, process] of openclawProxyProcesses.entries()) {
+      activeProxies.push({
+        sessionId,
+        status: 'running',
+        logFile: openclawProxyLogFiles.get(sessionId)
+      });
+    }
+
+    res.json({
+      activeProxies,
+      count: activeProxies.length
+    });
+  } catch (error) {
+    logger.error('Failed to get OpenClaw proxy status', { error: error?.message || String(error) });
+    res.status(500).json({
+      error: 'failed_to_get_openclaw_status'
+    });
+  }
+});
+
+app.get('/api/scheduled-tasks/upcoming', (req, res) => {
+  try {
+    const days = parseInt(req.query.days) || 30;
+    const tasks = ScheduledTasks.getUpcomingJobs(days);
+    res.json({
+      tasks
+    });
+  } catch (error) {
+    logger.error('Upcoming scheduled tasks query failed', { error: error?.message || String(error) });
+    res.status(500).json({
+      error: 'upcoming_scheduled_tasks_query_failed'
+    });
+  }
+});
+
+app.post('/api/scheduled-tasks/calendar-range', (req, res) => {
+  try {
+    const { startDate, endDate } = req.body;
+
+    if (!startDate || !endDate) {
+      return res.status(400).json({
+        error: 'missing_start_date_or_end_date'
+      });
+    }
+
+    const tasks = ScheduledTasks.getScheduledJobsInRange(startDate, endDate);
+    res.json({
+      tasks
+    });
+  } catch (error) {
+    logger.error('Calendar range scheduled tasks query failed', { error: error?.message || String(error) });
+    res.status(500).json({
+      error: 'calendar_range_scheduled_tasks_query_failed'
+    });
+  }
+});
+
+app.get('/api/scheduled-tasks/:jobId', (req, res) => {
+  try {
+    const jobId = req.params.jobId;
+    const task = ScheduledTasks.getScheduledJob(jobId);
+
+    if (!task) {
+      return res.status(404).json({
+        error: 'task_not_found'
+      });
+    }
+
+    res.json({
+      task
+    });
+  } catch (error) {
+    logger.error('Scheduled task detail query failed', { error: error?.message || String(error) });
+    res.status(500).json({
+      error: 'scheduled_task_detail_query_failed'
+    });
+  }
+});
+
+app.get('/api/scheduled-tasks/:jobId/history', (req, res) => {
+  try {
+    const jobId = req.params.jobId;
+    const limit = parseInt(req.query.limit) || 20;
+
+    const history = ScheduledTasks.getJobRunHistory(jobId, limit);
+    res.json({
+      history
+    });
+  } catch (error) {
+    logger.error('Scheduled task history query failed', { error: error?.message || String(error) });
+    res.status(500).json({
+      error: 'scheduled_task_history_query_failed'
+    });
+  }
+});
+
+app.patch('/api/scheduled-tasks/:jobId/state', (req, res) => {
+  try {
+    const jobId = req.params.jobId;
+    const { enabled } = req.body;
+
+    if (typeof enabled !== 'boolean') {
+      return res.status(400).json({
+        error: 'invalid_enabled_value'
+      });
+    }
+
+    const result = ScheduledTasks.updateJobState(jobId, enabled);
+
+    if (!result.success) {
+      return res.status(404).json({
+        error: result.error
+      });
+    }
+
+    res.json({
+      success: true,
+      task: result.job
+    });
+  } catch (error) {
+    logger.error('Scheduled task state update failed', { error: error?.message || String(error) });
+    res.status(500).json({
+      error: 'scheduled_task_state_update_failed'
+    });
+  }
+});
+
+// Update full scheduled task
+app.put('/api/scheduled-tasks/:jobId', (req, res) => {
+  try {
+    const jobId = req.params.jobId;
+    const newData = req.body;
+
+    // Validate required fields
+    if (!newData.name) {
+      return res.status(400).json({
+        error: 'name_required'
+      });
+    }
+
+    const result = ScheduledTasks.updateJob(jobId, newData);
+
+    if (!result.success) {
+      return res.status(404).json({
+        error: result.error
+      });
+    }
+
+    res.json({
+      success: true,
+      task: result.job
+    });
+  } catch (error) {
+    logger.error('Scheduled task update failed', { error: error?.message || String(error) });
+    res.status(500).json({
+      error: 'scheduled_task_update_failed'
+    });
+  }
+});
+
 // Serve static files from dist directory
 app.use(express.static(path.join(__dirname, '..', 'dist')));
+
+// Catch-all route to serve index.html for client-side routing
+// This ensures React Router handles all frontend routes
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, '..', 'dist', 'index.html'));
+});
 
 // Create HTTP server
 const server = createServer(app);
@@ -94,6 +572,27 @@ function broadcastUsageTotals() {
 function parseMessagesFromLines(lines, parser) {
   if (!Array.isArray(lines) || lines.length === 0) return [];
   return lines.map(line => parser.parseMessage(line)).filter(Boolean);
+}
+
+function getLatestModelFromLines(lines, parser) {
+  if (!parser?.parseUsageEvent || !Array.isArray(lines) || lines.length === 0) return null;
+
+  // Walk backwards to find the newest model hint.
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const event = parser.parseUsageEvent(lines[i]);
+    if (!event) continue;
+
+    // Claude/OpenClaw: delta events carry model
+    if (event.kind === 'delta' && event.model) return String(event.model);
+
+    // Codex: model events
+    if (event.kind === 'model' && event.model) return String(event.model);
+
+    // Some parsers may emit a plain { model: ... }
+    if (event.model) return String(event.model);
+  }
+
+  return null;
 }
 
 function ingestUsageFromLines(lines, parser, toolName, sessionId) {
@@ -234,12 +733,19 @@ function processFile(filePath, parser, toolName) {
   // Check if this is a new session
   if (!existingSession) {
     const projectName = parser.getProjectName(path.dirname(filePath), filePath);
+    const agentId = (typeof parser.getAgentId === 'function') ? parser.getAgentId(filePath) : null;
+    const model = getLatestModelFromLines(lines, parser);
+
+    // Debug logging for agentId
+    console.log(`[DEBUG] New session ${sessionId}: agentId=${agentId}, model=${model}, filePath=${filePath}`);
+
     SessionManager.createSession(
       sessionId,
       toolName,
       projectName,
       filePath,
-      projectDir
+      projectDir,
+      { agentId, model }
     );
     runningChanged = UsageManager.upsertLiveSession(sessionId, toolName, 'active');
 
@@ -254,6 +760,8 @@ function processFile(filePath, parser, toolName) {
       sessionId,
       tool: toolName,
       name: projectName,
+      agentId,
+      model,
       messages: appended,
       state: 'active'
     });
@@ -261,6 +769,22 @@ function processFile(filePath, parser, toolName) {
     const session = existingSession;
     if (session && lines.length > 0 && session.state === 'idle') {
       SessionManager.setSessionState(sessionId, 'active', handleStateChange);
+    }
+
+    // Best-effort: update session model/agentId when we observe it in new lines.
+    const nextModel = getLatestModelFromLines(lines, parser);
+    const nextAgentId = (typeof parser.getAgentId === 'function') ? parser.getAgentId(filePath) : null;
+
+    // Debug logging for session update
+    console.log(`[DEBUG] Session update ${sessionId}: agentId=${nextAgentId}, model=${nextModel}`);
+
+    if (SessionManager.updateSessionMeta(sessionId, { model: nextModel, agentId: nextAgentId })) {
+      broadcast({
+        type: 'session_update',
+        sessionId,
+        agentId: nextAgentId,
+        model: nextModel
+      });
     }
 
     if (parsedMessages.length > 0) {
@@ -568,7 +1092,7 @@ async function checkProcesses() {
 }
 
 // Start server
-server.listen(PORT, async () => {
+server.listen(PORT, '127.0.0.1', async () => {
   logger.serverStarted(PORT, 0);
 
   await PricingService.initPricingService();
@@ -654,4 +1178,31 @@ server.listen(PORT, async () => {
       })
       .catch(() => {});
   }, EXTERNAL_USAGE_REFRESH_INTERVAL_MS);
+});
+
+// Handle process termination gracefully
+process.on('SIGTERM', () => {
+  logger.info('Received SIGTERM, shutting down gracefully');
+  // Kill any running OpenClaw proxy processes
+  for (const [sessionId, process] of openclawProxyProcesses.entries()) {
+    try {
+      process.kill('SIGTERM');
+    } catch (error) {
+      logger.error('Failed to kill OpenClaw proxy process', { sessionId, error: error.message });
+    }
+  }
+  process.exit(0);
+});
+
+process.on('SIGINT', () => {
+  logger.info('Received SIGINT, shutting down gracefully');
+  // Kill any running OpenClaw proxy processes
+  for (const [sessionId, process] of openclawProxyProcesses.entries()) {
+    try {
+      process.kill('SIGTERM');
+    } catch (error) {
+      logger.error('Failed to kill OpenClaw proxy process', { sessionId, error: error.message });
+    }
+  }
+  process.exit(0);
 });

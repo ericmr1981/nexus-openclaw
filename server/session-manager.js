@@ -4,6 +4,12 @@ const sessions = new Map();
 import fs from 'fs';
 import { sessionLogger } from './utils/logger.js';
 
+// Initialize the session manager
+export function init() {
+  // Currently no initialization needed, but keeping for consistency
+  return true;
+}
+
 // Codex doesn't expose reliable per-session process markers; use file mtime as an activity signal.
 const CODEX_ACTIVE_MTIME_GRACE_MS = 5 * 60 * 1000; // 5 minutes
 // Claude: prefer lsof-mapped active files, but keep recently-updated sessions visible after the process exits.
@@ -35,12 +41,21 @@ export function getSession(sessionId) {
 }
 
 // Create new session
-export function createSession(sessionId, tool, name, filePath, projectDir) {
+export function createSession(sessionId, tool, name, filePath, projectDir, meta = {}) {
+  // Handle null/undefined values gracefully
+  sessionId = sessionId || 'unknown-session';
+  tool = tool || 'unknown';
+  name = name || 'Unknown Session';
+  filePath = filePath || '';
+  projectDir = projectDir || '';
+
   const now = Date.now();
   const session = {
     sessionId,
     tool,
     name,
+    agentId: (meta && meta.agentId != null) ? meta.agentId : null,
+    model: (meta && meta.model != null) ? meta.model : null,
     messages: [],
     filePath,
     projectDir,
@@ -55,10 +70,37 @@ export function createSession(sessionId, tool, name, filePath, projectDir) {
   return session;
 }
 
+
+// Best-effort session metadata updates (agentId/model).
+export function updateSessionMeta(sessionId, patch = {}) {
+  const session = sessions.get(sessionId);
+  if (!session) return false;
+  let changed = false;
+
+  if (Object.prototype.hasOwnProperty.call(patch, 'agentId')) {
+    const next = patch.agentId ?? null;
+    if (session.agentId !== next) {
+      session.agentId = next;
+      changed = true;
+    }
+  }
+
+  if (Object.prototype.hasOwnProperty.call(patch, 'model')) {
+    const next = patch.model ?? null;
+    if (session.model !== next) {
+      session.model = next;
+      changed = true;
+    }
+  }
+
+  if (changed) session.lastModified = Date.now();
+  return changed;
+}
+
 // Add messages to session
 export function addMessages(sessionId, messages) {
   const session = sessions.get(sessionId);
-  if (!session) return null;
+  if (!session || !messages) return [];
 
   // Some upstream agents can emit duplicate adjacent messages (e.g. retries/fallbacks)
   // and our parsers intentionally skip many non-text entries, which can make those

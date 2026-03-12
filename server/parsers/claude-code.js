@@ -22,13 +22,16 @@ export function parseMessage(line) {
   try {
     const obj = JSON.parse(line);
 
-    // Extract user or assistant messages
-    if (obj.type === 'user' && obj.message?.role === 'user') {
+    // Handle the standard Claude Code format: {type: "user|assistant", message: {role: "user|assistant", content: ...}}
+    if (obj.type && obj.message?.role) {
       const content = obj.message.content;
       let text = '';
 
       if (typeof content === 'string') {
         text = content;
+      } else if (typeof content === 'number' || typeof content === 'boolean') {
+        // Handle numeric/boolean content by converting to string
+        text = String(content);
       } else if (Array.isArray(content)) {
         text = content
           .filter(item => item.type === 'text')
@@ -36,23 +39,26 @@ export function parseMessage(line) {
           .join('\n');
       }
 
-      return { role: 'user', content: text };
+      return { role: obj.message.role, content: text };
     }
 
-    if (obj.type === 'assistant' && obj.message?.role === 'assistant') {
-      const content = obj.message.content;
+    // Handle simplified format: {role: "user|assistant", content: ...} for flexibility
+    if (obj.role && obj.content !== undefined) {
       let text = '';
 
-      if (typeof content === 'string') {
-        text = content;
-      } else if (Array.isArray(content)) {
-        text = content
+      if (typeof obj.content === 'string') {
+        text = obj.content;
+      } else if (typeof obj.content === 'number' || typeof obj.content === 'boolean') {
+        // Handle numeric/boolean content by converting to string
+        text = String(obj.content);
+      } else if (Array.isArray(obj.content)) {
+        text = obj.content
           .filter(item => item.type === 'text')
           .map(item => item.text)
           .join('\n');
       }
 
-      return { role: 'assistant', content: text };
+      return { role: obj.role, content: text };
     }
 
     return null;

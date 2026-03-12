@@ -226,3 +226,17 @@ export function getProjectName(dirPath, filePath) {
 export function encodeCwd(cwd) {
   return cwd.replace(/\//g, '-');
 }
+
+
+// Extract OpenClaw agent id from a session file path (best-effort).
+// Expected paths include: ~/.openclaw/agents/<agentId>/(sessions|workspace)/<session>.jsonl
+export function getAgentId(filePath) {
+  if (!filePath) return null;
+  const parts = String(filePath).split(path.sep);
+  const idx = parts.lastIndexOf('agents');
+  if (idx >= 0 && idx + 1 < parts.length) {
+    const agentId = parts[idx + 1];
+    return agentId || null;
+  }
+  return null;
+}

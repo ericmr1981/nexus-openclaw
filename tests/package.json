@@ -1,0 +1,24 @@
+{
+  "name": "nexus-tests",
+  "version": "1.0.0",
+  "description": "Test suite for Nexus project",
+  "scripts": {
+    "test:unit": "node tests/unit/server.test.js && node tests/unit/edge-cases.test.js",
+    "test:integration": "node tests/integration/websocket.test.js",
+    "test:e2e": "npm run test:usage-parsers && npm run test:usage-manager && npm run test:pricing-stability",
+    "test:all": "npm run test:unit && npm run test:integration && npm run test:e2e",
+    "test:ci": "npm run test:all"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "ws": "^8.14.2"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.58.2",
+    "chai": "^4.3.7",
+    "jsdom": "^22.1.0",
+    "sinon": "^15.2.0",
+    "puppeteer": "^24.37.3",
+    "concurrently": "^9.2.1"
+  }
+}

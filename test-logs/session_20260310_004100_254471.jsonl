@@ -1,0 +1,3 @@
+{"ts": "2026-03-10T00:41:00.254492", "event": "TASK_START", "config": {"uri": "ws://127.0.0.1:18789"}}
+{"ts": "2026-03-10T00:41:00.296055", "event": "RECV", "summary": "{'type': 'event', 'event': 'connect.challenge', 'payload': {'nonce': 'd517cfaf-1255-4ec1-a339-83c806...", "full_data": {"type": "event", "event": "connect.challenge", "payload": {"nonce": "d517cfaf-1255-4ec1-a339-83c8066257a5", "ts": 1773074460295}}}
+{"ts": "2026-03-10T00:41:10.306229", "event": "TASK_END", "status": "SUCCESS", "duration_sec": 10.051667}

@@ -13,6 +13,19 @@ export function DenseSessionCard({ session, showToolEvents }: DenseSessionCardPr
   const scrollRef = useRef<HTMLDivElement>(null);
   const [isEntering, setIsEntering] = useState(true);
 
+  // Debug logging for OpenClaw sessions
+  if (session.tool === 'openclaw') {
+    const shouldShowMeta = !!(session.agentId || session.model);
+    console.log('[DenseSessionCard DEBUG] OpenClaw session:', {
+      sessionId: session.sessionId?.substring(0, 8),
+      agentId: session.agentId,
+      model: session.model,
+      shouldShowMeta,
+      agentIdTruthy: !!session.agentId,
+      modelTruthy: !!session.model
+    });
+  }
+
   useEffect(() => {
     const timer = window.setTimeout(() => setIsEntering(false), 400);
     return () => window.clearTimeout(timer);
@@ -51,6 +64,12 @@ export function DenseSessionCard({ session, showToolEvents }: DenseSessionCardPr
           {toolConfig.label}
         </span>
         <span className="dense-card-name">{session.name}</span>
+        {(session.agentId || session.model) && (
+          <span className="dense-card-meta">
+            {session.agentId && <span className="dense-card-meta-badge">{session.agentId}</span>}
+            {session.model && <span className="dense-card-meta-badge">{session.model}</span>}
+          </span>
+        )}
       </div>
 
       {/* Terminal-like text surface with role colors */}

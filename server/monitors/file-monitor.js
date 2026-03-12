@@ -321,6 +321,12 @@ export function scanAllProjects(projectsDir, onFileFound, onDirFound, options = 
     const projectDirs = fs.readdirSync(projectsDir);
 
     projectDirs.forEach(dirName => {
+      // Claude Code may create a project directory named '-' for cwd='/' (root).
+      // This can be noisy (e.g., auth probes writing sessions). Allow ignoring it.
+      if (dirName === '-' && process.env.NEXUS_CLAUDE_IGNORE_DASH_PROJECT !== '0') {
+        return;
+      }
+
       const projectDir = path.join(projectsDir, dirName);
 
       try {
@@ -334,7 +340,8 @@ export function scanAllProjects(projectsDir, onFileFound, onDirFound, options = 
       }
     });
 
-    console.log(`Scanned ${projectDirs.length} project directories`);
+    const scannedCount = projectDirs.filter(d => !(d === '-' && process.env.NEXUS_CLAUDE_IGNORE_DASH_PROJECT !== '0')).length;
+    console.log(`Scanned ${scannedCount} project directories`);
   } catch (error) {
     console.error('Error scanning projects:', error.message);
   }

@@ -39,10 +39,19 @@ export function useSessionsStream() {
       const incomingSessions = Array.isArray(message.sessions) ? message.sessions : [];
       const newSessions = new Map<string, Session>();
       incomingSessions.forEach((session) => {
-        newSessions.set(session.sessionId, {
+        const sessionWithMeta = {
           ...session,
           lastModified: Number(session.lastModified || Date.now())
-        });
+        };
+        // Debug log for OpenClaw sessions
+        if (session.tool === 'openclaw') {
+          console.log('[FRONTEND DEBUG] OpenClaw session received:', {
+            sessionId: session.sessionId?.substring(0, 8),
+            agentId: session.agentId,
+            model: session.model
+          });
+        }
+        newSessions.set(session.sessionId, sessionWithMeta);
       });
       setSessions(newSessions);
 
@@ -61,6 +70,8 @@ export function useSessionsStream() {
         sessionId: message.sessionId,
         tool: message.tool,
         name: message.name,
+        agentId: message.agentId ?? null,
+        model: message.model ?? null,
         messages: message.messages,
         state: message.state || 'active',
         lastModified: Number(message.lastModified || Date.now())
@@ -115,6 +126,28 @@ export function useSessionsStream() {
       return;
     }
 
+
+    if (message.type === 'session_update') {
+      const sessionId = message.sessionId;
+      if (!sessionId) return;
+
+      setSessions((prev) => {
+        const session = prev.get(sessionId);
+        if (!session) return prev;
+
+        const next = {
+          ...session,
+          agentId: message.agentId ?? session.agentId ?? null,
+          model: message.model ?? session.model ?? null,
+          lastModified: Date.now()
+        };
+
+        const newSessions = new Map(prev);
+        newSessions.set(sessionId, next);
+        return newSessions;
+      });
+      return;
+    }
     if (message.type === 'session_remove') {
       if (!message.sessionId) return;
 
