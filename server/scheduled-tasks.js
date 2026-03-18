@@ -171,14 +171,44 @@ export function getScheduledJobsInRange(startDate, endDate) {
   for (const job of allJobs) {
     if (!job.schedule) continue;
 
+    const occurrences = [];
+
+    // Helper function to get the date portion (yyyy-MM-dd) in the job's timezone
+    const getDateInTimezone = (date, tz) => {
+      // Use Intl.DateTimeFormat to get the date components in the specified timezone
+      const options = tz ? { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' } : { year: 'numeric', month: '2-digit', day: '2-digit' };
+      const formatter = new Intl.DateTimeFormat('en-US', options);
+      const parts = formatter.formatToParts(date);
+      const year = parts.find(p => p.type === 'year').value;
+      const month = parts.find(p => p.type === 'month').value;
+      const day = parts.find(p => p.type === 'day').value;
+      return `${year}-${month}-${day}`;
+    };
+    
+    // Helper function to format datetime in the job's timezone as ISO-like string
+    const formatInTimezone = (date, tz) => {
+      // Get the date portion in the specified timezone
+      const datePart = getDateInTimezone(date, tz);
+      // Get the time portion (HH:mm:ss) in the specified timezone
+      const timeOptions = tz ? { timeZone: tz, hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false } : { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false };
+      const timeFormatter = new Intl.DateTimeFormat('en-US', timeOptions);
+      const timeStr = timeFormatter.format(date);
+      // Return as local datetime string without 'Z' suffix to prevent timezone conversion
+      // The localDate field is used for date grouping, runTime is for display only
+      return `${datePart}T${timeStr}`;
+    };
+
     // Handle cron schedule
     if (job.schedule.kind === 'cron' && job.schedule.expr) {
       try {
-        const options = job.schedule.tz ? { tz: job.schedule.tz } : {};
+        const options = {
+          currentDate: rangeStart,
+          endDate: rangeEnd,
+          ...(job.schedule.tz ? { tz: job.schedule.tz } : {})
+        };
         const interval = parseExpression(job.schedule.expr, options);
         
         // Get all occurrences in range
-        const occurrences = [];
         let current = null;
         let safety = 0;
         
@@ -189,35 +219,75 @@ export function getScheduledJobsInRange(startDate, endDate) {
             
             if (runDate > rangeEnd) break;
             if (runDate >= rangeStart) {
-              occurrences.push(runDate.toISOString());
+              // Format in the job's timezone so frontend displays the correct date
+              occurrences.push(formatInTimezone(runDate, job.schedule.tz));
             }
           } catch (e) {
             break;
           }
           safety++;
         }
-
-        if (occurrences.length > 0) {
-          result.push({
-            ...job,
-            occurrences
-          });
-        }
       } catch (error) {
         // Fallback to nextRun only
         if (job.nextRun) {
           const nextRun = new Date(job.nextRun);
           if (nextRun >= rangeStart && nextRun <= rangeEnd) {
-            result.push({ ...job, occurrences: [job.nextRun] });
+            occurrences.push(formatInTimezone(nextRun, job.schedule.tz));
           }
         }
       }
-    } else if (job.schedule.kind === 'every' && job.nextRun) {
-      // Handle every schedule
-      const nextRun = new Date(job.nextRun);
-      if (nextRun >= rangeStart && nextRun <= rangeEnd) {
-        result.push({ ...job, occurrences: [job.nextRun] });
+    } else if (job.schedule.kind === 'every' && job.schedule.everyMs) {
+      // Handle every schedule - calculate all occurrences in range
+      const everyMs = job.schedule.everyMs;
+      const anchorMs = job.schedule.anchorMs || rangeStart.getTime();
+      
+      // Start from anchor and add everyMs until we reach the range
+      let currentTime = anchorMs;
+      while (currentTime <= rangeEnd.getTime()) {
+        if (currentTime >= rangeStart.getTime()) {
+          occurrences.push(formatInTimezone(new Date(currentTime), job.schedule.tz));
+        }
+        currentTime += everyMs;
       }
+      
+      // If no occurrences found but nextRun is in range, add it
+      if (occurrences.length === 0 && job.nextRun) {
+        const nextRun = new Date(job.nextRun);
+        if (nextRun >= rangeStart && nextRun <= rangeEnd) {
+          occurrences.push(formatInTimezone(nextRun, job.schedule.tz));
+        }
+      }
+    } else if (job.schedule.kind === 'at' && job.schedule.at) {
+      // Handle "at" schedule (one-time execution)
+      const atDate = new Date(job.schedule.at);
+      if (atDate >= rangeStart && atDate <= rangeEnd) {
+        // Format in the job's timezone
+        occurrences.push(formatInTimezone(atDate, job.schedule.tz));
+      }
+    } else {
+      // Fallback: use nextRun if available and in range
+      if (job.nextRun) {
+        const nextRun = new Date(job.nextRun);
+        if (nextRun >= rangeStart && nextRun <= rangeEnd) {
+          occurrences.push(formatInTimezone(nextRun, job.schedule.tz));
+        }
+      }
+    }
+
+    // Only include jobs that have at least one occurrence in the range
+    if (occurrences.length > 0) {
+      // Add localDate field for each occurrence (date portion in the job's timezone)
+      // The occurrence string already has the date in the job's timezone from formatInTimezone,
+      // so we can just extract the first 10 characters (yyyy-MM-dd) directly
+      const occurrencesWithLocalDate = occurrences.map(occ => ({
+        runTime: occ,
+        localDate: occ.substring(0, 10) // "2026-03-17" - already in job's timezone
+      }));
+      
+      result.push({
+        ...job,
+        occurrences: occurrencesWithLocalDate
+      });
     }
   }
 

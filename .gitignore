@@ -7,3 +7,11 @@ dist/
 /tmp/nexus-*.log
 .nexus-runtime/
 dev-docs/00-vision.md
+.gitnexus
+
+# local agent artifacts
+.agents/
+.claude/
+
+# embedded repos / local clones
+bit-office/

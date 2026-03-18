@@ -383,6 +383,409 @@ app.get('/api/openclaw-proxy/status', (req, res) => {
   }
 });
 
+// Get all agents grouped by category with collapsible sections
+app.get('/api/agents', (req, res) => {
+  try {
+    const sessions = SessionManager.getAllSessions();
+    const now = Date.now();
+    const IDLE_THRESHOLD = 3 * 60 * 1000; // 3 minutes
+
+    // Decode projectDir from encoded format (e.g., -Users-ericmr-Docs-MyProject -> MyProject)
+    const decodeProjectName = (encodedPath) => {
+      if (!encodedPath) return null;
+      const decoded = encodedPath.replace(/^-+/, '').replace(/-+/g, '/');
+      const parts = decoded.split('/').filter(p => p);
+      return parts.length > 0 ? parts[parts.length - 1] : null;
+    };
+
+    // Helper to determine agent status
+    const getStatus = (lastModified, state) => {
+      const idleDuration = now - (lastModified || Date.now());
+      if (state === 'active') {
+        return { status: 'working', statusColor: 'green' };
+      } else if (state === 'idle') {
+        if (idleDuration > IDLE_THRESHOLD) {
+          return { status: 'offline', statusColor: 'gray' };
+        }
+        return { status: 'idle', statusColor: 'yellow' };
+      }
+      return { status: 'offline', statusColor: 'red' };
+    };
+
+    // Categories with agent data
+    const categories = {
+      openclaw: { agents: new Map(), sessionCount: new Map(), paths: new Map() },
+      claudeCode: { agents: new Map(), sessionCount: new Map(), paths: new Map() },
+      codex: { agents: new Map(), sessionCount: new Map(), paths: new Map() },
+      web: { agents: new Map(), sessionCount: new Map(), paths: new Map() },
+      other: { agents: new Map(), sessionCount: new Map(), paths: new Map() }
+    };
+
+    // Process sessions
+    for (const session of sessions) {
+      const { tool, agentId, projectDir, filePath, state, lastModified } = session;
+      let category, id, fullPath;
+
+      if (tool === 'openclaw') {
+        category = 'openclaw';
+        id = agentId;
+        fullPath = filePath || `~/.openclaw/agents/${agentId}/`;
+      } else if (tool === 'claude-code') {
+        category = 'claudeCode';
+        id = decodeProjectName(projectDir);
+        fullPath = projectDir || `~/.claude/projects/${id}/`;
+      } else if (tool === 'codex') {
+        category = 'codex';
+        id = 'Codex';
+        fullPath = filePath || '~/.codex/sessions/';
+      } else if (tool === 'web' || tool === 'browser') {
+        category = 'web';
+        id = session.name || 'Web Tool';
+        fullPath = 'Web-based tool';
+      } else {
+        category = 'other';
+        id = session.name || agentId || 'Unknown';
+        fullPath = filePath || 'Unknown location';
+      }
+
+      if (!id || !category) continue;
+
+      const { status, statusColor } = getStatus(lastModified, state);
+
+      // Update agent map with highest priority state
+      const existing = categories[category].agents.get(id);
+      let statePriority = 0;
+      if (state === 'active') statePriority = 3;
+      else if (state === 'idle') statePriority = 2;
+      else if (state === 'cooling') statePriority = 1;
+
+      if (!existing || statePriority > existing.statePriority) {
+        categories[category].agents.set(id, { status, statusColor, statePriority });
+        categories[category].paths.set(id, fullPath);
+      }
+
+      // Count sessions
+      categories[category].sessionCount.set(id, (categories[category].sessionCount.get(id) || 0) + 1);
+    }
+
+    // Scan directories for all agents (not just active)
+    const fsExists = (dir) => {
+      try {
+        return fs.existsSync(dir);
+      } catch {
+        return false;
+      }
+    };
+
+    // Scan OpenClaw agents
+    const openclawDir = path.join(os.homedir(), '.openclaw', 'agents');
+    if (fsExists(openclawDir)) {
+      const entries = fs.readdirSync(openclawDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.isDirectory()) {
+          const agentPath = path.join(openclawDir, entry.name);
+          if (!categories.openclaw.agents.has(entry.name)) {
+            categories.openclaw.agents.set(entry.name, { status: 'offline', statusColor: 'gray', statePriority: 0 });
+            categories.openclaw.paths.set(entry.name, agentPath);
+          }
+        }
+      }
+    }
+
+    // Scan Claude Code projects
+    const claudeDir = path.join(os.homedir(), '.claude', 'projects');
+    if (fsExists(claudeDir)) {
+      const entries = fs.readdirSync(claudeDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.isDirectory()) {
+          const projectName = decodeProjectName(entry.name);
+          const projectPath = path.join(claudeDir, entry.name);
+          if (projectName && !categories.claudeCode.agents.has(projectName)) {
+            categories.claudeCode.agents.set(projectName, { status: 'offline', statusColor: 'gray', statePriority: 0 });
+            categories.claudeCode.paths.set(projectName, projectPath);
+          }
+        }
+      }
+    }
+
+    // Build response
+    const buildAgentsList = (catKey) => {
+      return Array.from(categories[catKey].agents.entries()).map(([agentId, data]) => ({
+        agentId,
+        status: data.status,
+        statusColor: data.statusColor,
+        sessionCount: categories[catKey].sessionCount.get(agentId) || 0,
+        fullPath: categories[catKey].paths.get(agentId) || ''
+      })).sort((a, b) => {
+        const statusOrder = { working: 0, idle: 1, offline: 2 };
+        const statusDiff = statusOrder[a.statusColor] - statusOrder[b.statusColor];
+        if (statusDiff !== 0) return statusDiff;
+        return a.agentId.localeCompare(b.agentId);
+      });
+    };
+
+    const result = {
+      categories: [
+        {
+          key: 'openclaw',
+          title: 'OpenClaw',
+          agents: buildAgentsList('openclaw'),
+          defaultExpanded: true
+        },
+        {
+          key: 'claudeCode',
+          title: 'Claude Code',
+          agents: buildAgentsList('claudeCode'),
+          defaultExpanded: true
+        },
+        {
+          key: 'codex',
+          title: 'Codex',
+          agents: buildAgentsList('codex'),
+          defaultExpanded: false
+        },
+        {
+          key: 'web',
+          title: 'Web Apps',
+          agents: buildAgentsList('web'),
+          defaultExpanded: false
+        },
+        {
+          key: 'other',
+          title: 'Other',
+          agents: buildAgentsList('other'),
+          defaultExpanded: false
+        }
+      ],
+      totalAgents: Object.values(categories).reduce((sum, cat) => sum + cat.agents.size, 0)
+    };
+
+    res.json(result);
+  } catch (error) {
+    logger.error('Failed to get agents status', { error: error?.message || String(error) });
+    res.status(500).json({
+      error: 'failed_to_get_agents'
+    });
+  }
+});
+
+// Get OpenClaw agents status - lists ALL agents from disk, not just active sessions
+app.get('/api/openclaw-agents', (req, res) => {
+  try {
+    const sessions = SessionManager.getAllSessions();
+    const now = Date.now();
+    const IDLE_THRESHOLD = 3 * 60 * 1000; // 3 minutes
+
+    // Build a map of active session info by agentId
+    const activeAgentMap = new Map();
+    for (const session of sessions) {
+      if (session.tool !== 'openclaw' || !session.agentId) continue;
+      const agentId = session.agentId;
+      const lastModified = session.lastModified || Date.now();
+      const idleDuration = now - lastModified;
+
+      let statePriority = 0;
+      if (session.state === 'active') statePriority = 3;
+      else if (session.state === 'idle') statePriority = 2;
+      else if (session.state === 'cooling') statePriority = 1;
+
+      const existing = activeAgentMap.get(agentId);
+      if (!existing || statePriority > existing.statePriority) {
+        let status, statusColor;
+        if (session.state === 'active') {
+          status = 'working';
+          statusColor = 'green';
+        } else if (session.state === 'idle') {
+          if (idleDuration > IDLE_THRESHOLD) {
+            status = 'offline';
+            statusColor = 'gray';
+          } else {
+            status = 'idle';
+            statusColor = 'yellow';
+          }
+        } else {
+          status = 'offline';
+          statusColor = 'red';
+        }
+        activeAgentMap.set(agentId, { status, statusColor, statePriority });
+      }
+    }
+
+    // Count sessions per agent
+    const sessionCountMap = new Map();
+    for (const session of sessions) {
+      if (session.tool !== 'openclaw' || !session.agentId) continue;
+      sessionCountMap.set(session.agentId, (sessionCountMap.get(session.agentId) || 0) + 1);
+    }
+
+    // Scan the actual agents directory to find ALL agents
+    const agentsDir = path.join(os.homedir(), '.openclaw', 'agents');
+
+    const allAgentIds = new Set(activeAgentMap.keys());
+
+    if (fs.existsSync(agentsDir)) {
+      const entries = fs.readdirSync(agentsDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.isDirectory()) {
+          allAgentIds.add(entry.name);
+        }
+      }
+    }
+
+    // Build the full agent list
+    const agents = Array.from(allAgentIds).map(agentId => {
+      const active = activeAgentMap.get(agentId);
+      const status = active ? active.status : 'offline';
+      const statusColor = active ? active.statusColor : 'gray';
+      const sessionCount = sessionCountMap.get(agentId) || 0;
+
+      return {
+        agentId,
+        status,
+        statusColor,
+        sessionCount
+      };
+    });
+
+    // Sort by status (working > idle > offline), then by name
+    const statusOrder = { working: 0, idle: 1, offline: 2 };
+    agents.sort((a, b) => {
+      const statusDiff = statusOrder[a.status] - statusOrder[b.status];
+      if (statusDiff !== 0) return statusDiff;
+      return a.agentId.localeCompare(b.agentId);
+    });
+
+    res.json({
+      agents,
+      count: agents.length
+    });
+  } catch (error) {
+    logger.error('Failed to get OpenClaw agents status', { error: error?.message || String(error) });
+    res.status(500).json({
+      error: 'failed_to_get_openclaw_agents'
+    });
+  }
+});
+
+// Get Claude Code agents status - lists all projects/agents from disk
+app.get('/api/claude-agents', (req, res) => {
+  try {
+    const sessions = SessionManager.getAllSessions();
+    const now = Date.now();
+    const IDLE_THRESHOLD = 3 * 60 * 1000; // 3 minutes
+
+    // Decode projectDir from encoded format (e.g., -Users-ericmr-Docs-MyProject -> MyProject)
+    // Claude Code encodes paths by replacing / with - and prepending dashes
+    const decodeProjectName = (encodedPath) => {
+      if (!encodedPath) return null;
+      // Remove leading dashes and replace - with / to decode
+      const decoded = encodedPath.replace(/^-+/, '').replace(/-+/g, '/');
+      // Get the last segment (basename)
+      const parts = decoded.split('/').filter(p => p);
+      return parts.length > 0 ? parts[parts.length - 1] : null;
+    };
+
+    // Build a map of active session info by decoded project name
+    const activeProjectMap = new Map();
+
+    for (const session of sessions) {
+      if (session.tool !== 'claude-code' || !session.projectDir) continue;
+      const project = decodeProjectName(session.projectDir);
+      if (!project) continue;
+
+      const lastModified = session.lastModified || Date.now();
+      const idleDuration = now - lastModified;
+
+      let statePriority = 0;
+      if (session.state === 'active') statePriority = 3;
+      else if (session.state === 'idle') statePriority = 2;
+      else if (session.state === 'cooling') statePriority = 1;
+
+      const existing = activeProjectMap.get(project);
+      if (!existing || statePriority > existing.statePriority) {
+        let status, statusColor;
+        if (session.state === 'active') {
+          status = 'working';
+          statusColor = 'green';
+        } else if (session.state === 'idle') {
+          if (idleDuration > IDLE_THRESHOLD) {
+            status = 'offline';
+            statusColor = 'gray';
+          } else {
+            status = 'idle';
+            statusColor = 'yellow';
+          }
+        } else {
+          status = 'offline';
+          statusColor = 'red';
+        }
+        activeProjectMap.set(project, { status, statusColor, statePriority });
+      }
+    }
+
+    // Count sessions per project
+    const sessionCountMap = new Map();
+    for (const session of sessions) {
+      if (session.tool !== 'claude-code' || !session.projectDir) continue;
+      const project = decodeProjectName(session.projectDir);
+      if (!project) continue;
+      sessionCountMap.set(project, (sessionCountMap.get(project) || 0) + 1);
+    }
+
+    // Start with active projects
+    const allProjectIds = new Set(activeProjectMap.keys());
+
+    // Scan the actual projects directory to find ALL projects
+    const projectsDir = path.join(os.homedir(), '.claude', 'projects');
+
+    // Add projects from disk that aren't currently active
+    if (fs.existsSync(projectsDir)) {
+      const entries = fs.readdirSync(projectsDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.isDirectory()) {
+          const projectName = decodeProjectName(entry.name);
+          if (projectName) {
+            allProjectIds.add(projectName);
+          }
+        }
+      }
+    }
+
+    // Build the full agent list
+    const agents = Array.from(allProjectIds).map(projectId => {
+      const active = activeProjectMap.get(projectId);
+      const status = active ? active.status : 'offline';
+      const statusColor = active ? active.statusColor : 'gray';
+      const sessionCount = sessionCountMap.get(projectId) || 0;
+
+      return {
+        agentId: projectId,
+        status,
+        statusColor,
+        sessionCount
+      };
+    });
+
+    // Sort by status (working > idle > offline), then by name
+    const statusOrder = { working: 0, idle: 1, offline: 2 };
+    agents.sort((a, b) => {
+      const statusDiff = statusOrder[a.status] - statusOrder[b.status];
+      if (statusDiff !== 0) return statusDiff;
+      return a.agentId.localeCompare(b.agentId);
+    });
+
+    res.json({
+      agents,
+      count: agents.length
+    });
+  } catch (error) {
+    logger.error('Failed to get Claude Code agents status', { error: error?.message || String(error) });
+    res.status(500).json({
+      error: 'failed_to_get_claude_agents'
+    });
+  }
+});
+
 app.get('/api/scheduled-tasks/upcoming', (req, res) => {
   try {
     const days = parseInt(req.query.days) || 30;

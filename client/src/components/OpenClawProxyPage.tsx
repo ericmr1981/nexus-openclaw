@@ -11,6 +11,8 @@ interface OpenClawLogEntry {
   status?: string;
 }
 
+type LogFilter = 'all' | 'messages' | 'operations';
+
 // Extract model from message params
 const getModel = (data: any): string => {
   if (!data) return '';
@@ -125,7 +127,7 @@ const getMessageDirection = (event: string): { icon: string; color: string; labe
 };
 
 // Component for a single log entry (minimal version)
-const LogEntry: React.FC<{ log: OpenClawLogEntry }> = ({ log }) => {
+const LogEntry: React.FC<{ log: OpenClawLogEntry; filter: LogFilter }> = ({ log, filter }) => {
   const [expanded, setExpanded] = useState(false);
 
   const direction = getMessageDirection(log.event);
@@ -133,6 +135,16 @@ const LogEntry: React.FC<{ log: OpenClawLogEntry }> = ({ log }) => {
   const summary = getMessageSummary(log);
 
   const hasPayload = log.payload || log.full_data;
+
+  // Filter logic: messages = SENT/RECV, operations = TASK_START/TASK_END/AUTH
+  const isMessage = log.event === 'SENT' || log.event === 'RECV';
+  const isOperation = log.event === 'TASK_START' || log.event === 'TASK_END' ||
+                      log.event === 'AUTH_REQUEST' || log.event === 'AUTH_SUCCESS' ||
+                      log.event === 'AUTH_ERROR';
+
+  // Apply filter
+  if (filter === 'messages' && !isMessage) return null;
+  if (filter === 'operations' && !isOperation) return null;
 
   return (
     <div
@@ -223,6 +235,7 @@ const OpenClawProxyPage: React.FC = () => {
   const [logFilePath, setLogFilePath] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string>('');
+  const [logFilter, setLogFilter] = useState<LogFilter>('all');
 
   // Filter OpenClaw sessions - include any session with 'openclaw' in tool name or that is from OpenClaw
   // Also include sessions with 'openclaw' in agentId or sessionId
@@ -429,7 +442,7 @@ const OpenClawProxyPage: React.FC = () => {
           {logs.length > 0 ? (
             <div className="logs-list" style={{ maxHeight: '400px', overflowY: 'auto' }}>
               {logs.slice(-50).map((log, index) => (
-                <LogEntry key={`${log.ts}-${index}`} log={log} />
+                <LogEntry key={`${log.ts}-${index}`} log={log} filter={logFilter} />
               ))}
             </div>
           ) : (
@@ -441,6 +454,28 @@ const OpenClawProxyPage: React.FC = () => {
               )}
             </div>
           )}
+        </div>
+
+        {/* Filter buttons */}
+        <div className="log-filter-buttons">
+          <button
+            className={`filter-btn ${logFilter === 'all' ? 'active' : ''}`}
+            onClick={() => setLogFilter('all')}
+          >
+            All Info
+          </button>
+          <button
+            className={`filter-btn ${logFilter === 'messages' ? 'active' : ''}`}
+            onClick={() => setLogFilter('messages')}
+          >
+            Messages Only
+          </button>
+          <button
+            className={`filter-btn ${logFilter === 'operations' ? 'active' : ''}`}
+            onClick={() => setLogFilter('operations')}
+          >
+            Operations Only
+          </button>
         </div>
       </div>
     </div>

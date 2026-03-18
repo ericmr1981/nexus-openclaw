@@ -32,11 +32,11 @@ const CalendarView: React.FC = () => {
 
         // Calculate date range based on current view
         const startDate = view === 'month'
-          ? startOfMonth(currentDate).toISOString()
-          : startOfWeek(currentDate, { weekStartsOn: 1 }).toISOString();
+          ? format(startOfMonth(currentDate), "yyyy-MM-dd'T'HH:mm:ss")
+          : format(startOfWeek(currentDate, { weekStartsOn: 1 }), "yyyy-MM-dd'T'HH:mm:ss");
         const endDate = view === 'month'
-          ? endOfMonth(currentDate).toISOString()
-          : endOfWeek(currentDate, { weekStartsOn: 1 }).toISOString();
+          ? format(endOfMonth(currentDate), "yyyy-MM-dd'T'HH:mm:ss")
+          : format(endOfWeek(currentDate, { weekStartsOn: 1 }), "yyyy-MM-dd'T'HH:mm:ss");
 
         const response = await fetch('/api/scheduled-tasks/calendar-range', {
           method: 'POST',
@@ -58,10 +58,37 @@ const CalendarView: React.FC = () => {
         const byDate = new Map<string, TaskOccurrence[]>();
 
         for (const task of tasks) {
-          const occurrences = task.occurrences || (task.nextRun ? [task.nextRun] : []);
+          // Ensure occurrences is an array
+          let occurrences = Array.isArray(task.occurrences) && task.occurrences.length > 0
+            ? task.occurrences
+            : (task.nextRun && typeof task.nextRun === 'string'
+                ? [{ runTime: task.nextRun, localDate: format(parseISO(task.nextRun), 'yyyy-MM-dd') }]
+                : []);
 
-          for (const runTime of occurrences) {
-            const dateKey = format(parseISO(runTime), 'yyyy-MM-dd');
+          // Limit occurrences per task to avoid performance issues (max 100 per task)
+          if (occurrences.length > 100) {
+            occurrences = occurrences.slice(0, 100);
+          }
+
+          for (const occ of occurrences) {
+            // Ensure occ is an object with runTime
+            if (!occ || typeof occ !== 'object') {
+              console.warn('Invalid occurrence:', occ);
+              continue;
+            }
+
+            // Skip if runTime is not a valid string
+            if (!occ.runTime || typeof occ.runTime !== 'string') {
+              console.warn('Invalid runTime:', occ.runTime);
+              continue;
+            }
+
+            // Use localDate if available (from API), otherwise parse runTime
+            const localDate = occ.localDate && typeof occ.localDate === 'string' 
+              ? occ.localDate 
+              : format(parseISO(occ.runTime), 'yyyy-MM-dd');
+            const dateKey = localDate;
+            const runTime = occ.runTime;
 
             if (!byDate.has(dateKey)) {
               byDate.set(dateKey, []);
@@ -96,11 +123,13 @@ const CalendarView: React.FC = () => {
 
     return days.map(day => {
       const dateKey = format(day, 'yyyy-MM-dd');
+      const dayOccurrences = occurrencesByDate.get(dateKey) || [];
+
       return {
         date: day,
         isCurrentMonth: isSameMonth(day, date),
         isToday: isSameDay(day, today),
-        occurrences: occurrencesByDate.get(dateKey) || [],
+        occurrences: dayOccurrences,
       };
     });
   };
@@ -175,17 +204,30 @@ const CalendarView: React.FC = () => {
                     </span>
                   </div>
                   <div className="calendar-day-events-gc">
-                    {day.occurrences.map((occ, idx) => (
-                      <Link
-                        key={`${occ.taskId}-${idx}`}
-                        to={`/scheduled-tasks/${occ.taskId}`}
-                        className={`calendar-event-gc ${occ.enabled ? 'enabled' : 'disabled'}`}
-                        title={`${occ.taskName} (${occ.enabled ? 'Enabled' : 'Disabled'})`}
-                      >
-                        <span className="event-time-gc">{format(parseISO(occ.runTime), 'HH:mm')}</span>
-                        <span className="event-title-gc">{occ.taskName}</span>
-                      </Link>
-                    ))}
+                    {day.occurrences.map((occ, idx) => {
+                      // Safely parse time from runTime
+                      let timeStr = '';
+                      try {
+                        if (occ.runTime && typeof occ.runTime === 'string' && occ.runTime.length > 0) {
+                          const runDate = parseISO(occ.runTime);
+                          timeStr = format(runDate, 'HH:mm');
+                        }
+                      } catch (e) {
+                        console.warn('Failed to parse runTime:', occ.runTime, e);
+                      }
+
+                      return (
+                        <Link
+                          key={`${occ.taskId}-${idx}`}
+                          to={`/scheduled-tasks/${occ.taskId}`}
+                          className={`calendar-event-gc ${occ.enabled ? 'enabled' : 'disabled'}`}
+                          title={`${occ.taskName} (${occ.enabled ? 'Enabled' : 'Disabled'})`}
+                        >
+                          <span className="event-time-gc">{timeStr}</span>
+                          <span className="event-title-gc">{occ.taskName}</span>
+                        </Link>
+                      );
+                    })}
                     {day.occurrences.length > 4 && <div className="calendar-event-more-gc">+{day.occurrences.length - 4} more</div>}
                   </div>
                 </div>
@@ -196,7 +238,7 @@ const CalendarView: React.FC = () => {
       )}
 
       {view === 'week' && (
-        <div className="calendar-grid">
+        <div className="calendar-grid calendar-week-view">
           <div className="calendar-grid-header">
             {weekDays.map(day => (
               <div key={day.toString()} className="calendar-grid-day-header">
@@ -213,12 +255,25 @@ const CalendarView: React.FC = () => {
               return (
                 <div key={day.toString()} className="calendar-day">
                   <div className="calendar-day-tasks">
-                    {dayOccurrences.map((occ, idx) => (
-                      <Link key={`${occ.taskId}-${idx}`} to={`/scheduled-tasks/${occ.taskId}`} className={`calendar-task ${occ.enabled ? 'enabled' : 'disabled'}`}>
-                        <div className="font-medium truncate">{occ.taskName}</div>
-                        <div className="text-xs opacity-75">{format(parseISO(occ.runTime), 'HH:mm')}</div>
-                      </Link>
-                    ))}
+                    {dayOccurrences.map((occ, idx) => {
+                      // Safely parse time from runTime
+                      let timeStr = '';
+                      try {
+                        if (occ.runTime && typeof occ.runTime === 'string' && occ.runTime.length > 0) {
+                          const runDate = parseISO(occ.runTime);
+                          timeStr = format(runDate, 'HH:mm');
+                        }
+                      } catch (e) {
+                        console.warn('Failed to parse runTime:', occ.runTime, e);
+                      }
+
+                      return (
+                        <Link key={`${occ.taskId}-${idx}`} to={`/scheduled-tasks/${occ.taskId}`} className={`calendar-task ${occ.enabled ? 'enabled' : 'disabled'}`}>
+                          <div className="font-medium truncate">{occ.taskName}</div>
+                          <div className="text-xs opacity-75">{timeStr}</div>
+                        </Link>
+                      );
+                    })}
                     {dayOccurrences.length === 0 && <div className="text-xs text-gray-400 italic p-2 text-center">No tasks</div>}
                   </div>
                 </div>

@@ -1,6 +1,7 @@
 export interface Message {
   role: 'user' | 'assistant';
   content: string;
+  timestampMs?: number;
 }
 
 export type MessageKind = 'text' | 'tool_call' | 'tool_output';

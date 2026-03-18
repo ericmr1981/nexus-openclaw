@@ -2,6 +2,33 @@
 
 ## [Unreleased]
 
+### 2026-03-17 - 启动说明
+
+#### 记录 (Notes)
+- 启动 Nexus + Bit Office 供本地验证展示（由用户自行查看页面效果）。
+- Bit Office 前端仅展示 OpenClaw agents（隐藏本地/其他外部 agent）。
+- Agent 信息窗口隐藏工具调用内容（tool call 过滤）。
+- Agent 消息中将 `workspace` 显示为 `said`，移除所有方括号内容与 `tool_output` 行。
+
+### 2026-03-16 - OpenClaw lifecycle + 活动摘要
+
+#### 修改 (Changed)
+- Bit Office 顶部 Agent 条加入最近活动摘要（基于 LOG_APPEND / 结果摘要）。
+- 通过 OpenClaw Proxy 日志补充 lifecycle（start/end/error）精确状态与摘要提示。
+
+#### 限制 (Limitations)
+- 依赖 OpenClaw Proxy 正在运行并产生日志；未运行时仍仅能用 active/idle/cooling 近似。
+
+### 2026-03-16 - OpenClaw → Bit Office（方案1）限制记录
+
+#### 记录 (Notes)
+- 方案1仅桥接 Nexus 现有数据源，不引入额外 OpenClaw 网关事件或代理。
+- 当前无法在 Bit Office 页面完整呈现的内容：
+- 单个 agent 实时 Token 使用（缺少 per-agent/per-session TOKEN_UPDATE）。
+- 任务级事件与结果（TASK_STARTED / TASK_DONE / TASK_FAILED / APPROVAL_NEEDED / 预览信息 / diff 等）。
+- 团队与角色语义（TEAM_PHASE / TEAM_CHAT / AGENT_DEFS 等）。
+- 真实 PID 与工作目录（OpenClaw agent 非本地子进程，Nexus 无 PID；workspace 信息不稳定）。
+
 ### 2026-02-16 - 文档全量同步（与当前实现对齐）
 
 #### 修改 (Changed)
