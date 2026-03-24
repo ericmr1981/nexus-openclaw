@@ -15,3 +15,11 @@ dev-docs/00-vision.md
 
 # embedded repos / local clones
 bit-office/
+
+# OA project runtime data (local)
+oa-project/data/
+oa-project/.venv/
+oa-project/logs/
+
+# Local tool dumps / vendored experiments (kept out of repo to avoid huge commits)
+tools/

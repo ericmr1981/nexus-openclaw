@@ -6,6 +6,7 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import os from 'os';
 import { spawn } from 'child_process';
+import net from 'net';
 
 // Import modules
 import { initWebSocket, broadcast } from './websocket.js';
@@ -127,6 +128,151 @@ app.get('/api/scheduled-tasks', (req, res) => {
     });
   }
 });
+
+// OA Service Management
+const OA_DEFAULT_PORT = 3460;
+const OA_MAX_PORT_SCAN = 10;
+const OA_RUNTIME_DIR = path.join(process.cwd(), '.nexus-runtime');
+const OA_PID_FILE = path.join(OA_RUNTIME_DIR, 'oa.json');
+
+// OA process state
+let oaProcess = null;
+let oaConfig = {
+  port: OA_DEFAULT_PORT,
+  configPath: '',
+  startedByNexus: false
+};
+
+// Ensure runtime directory exists
+function ensureRuntimeDir() {
+  if (!fs.existsSync(OA_RUNTIME_DIR)) {
+    fs.mkdirSync(OA_RUNTIME_DIR, { recursive: true });
+  }
+}
+
+// Save OA process info to file
+function saveOaPidFile(port, pid) {
+  ensureRuntimeDir();
+  const data = {
+    port,
+    pid,
+    startedByNexus: true,
+    startedAt: new Date().toISOString()
+  };
+  fs.writeFileSync(OA_PID_FILE, JSON.stringify(data, null, 2));
+}
+
+// Load OA process info from file
+function loadOaPidFile() {
+  if (fs.existsSync(OA_PID_FILE)) {
+    try {
+      return JSON.parse(fs.readFileSync(OA_PID_FILE, 'utf-8'));
+    } catch (e) {
+      return null;
+    }
+  }
+  return null;
+}
+
+// Clear OA PID file
+function clearOaPidFile() {
+  if (fs.existsSync(OA_PID_FILE)) {
+    fs.unlinkSync(OA_PID_FILE);
+  }
+}
+
+// Check if a port is in use
+function checkPort(port) {
+  return new Promise((resolve) => {
+    const server = net.createServer();
+    server.once('error', (err) => {
+      if (err.code === 'EADDRINUSE') {
+        resolve(true); // Port is in use
+      } else {
+        resolve(false);
+      }
+    });
+    server.once('listening', () => {
+      server.close();
+      resolve(false); // Port is free
+    });
+    server.listen(port, '127.0.0.1');
+  });
+}
+
+// Find an available port starting from default
+async function findAvailablePort(startPort, maxAttempts) {
+  for (let i = 0; i < maxAttempts; i++) {
+    const port = startPort + i;
+    const inUse = await checkPort(port);
+    if (!inUse) {
+      return port;
+    }
+  }
+  return null;
+}
+
+// Check if OA process is running by PID
+function isProcessRunning(pid) {
+  try {
+    process.kill(pid, 0); // Signal 0 just checks if process exists
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+// Get OA status
+async function getOaStatus() {
+  const pidFile = loadOaPidFile();
+
+  if (!pidFile) {
+    return { running: false, port: OA_DEFAULT_PORT };
+  }
+
+  const { port, pid, startedByNexus } = pidFile;
+
+  // Check if process is still running
+  if (startedByNexus && pid && isProcessRunning(pid)) {
+    return {
+      running: true,
+      port,
+      pid,
+      url: `http://127.0.0.1:${port}`,
+      startedByNexus
+    };
+  }
+
+  // Process not running, clear stale PID file
+  if (startedByNexus) {
+    clearOaPidFile();
+  }
+
+  return { running: false, port: OA_DEFAULT_PORT };
+}
+
+// Stop OA process
+function stopOaProcess() {
+  const pidFile = loadOaPidFile();
+  if (!pidFile || !pidFile.startedByNexus) {
+    return false;
+  }
+
+  const { pid } = pidFile;
+  if (pid && isProcessRunning(pid)) {
+    try {
+      process.kill(pid, 'SIGTERM');
+      clearOaPidFile();
+      oaProcess = null;
+      return true;
+    } catch (e) {
+      logger.error('Failed to stop OA process', { error: e.message });
+    }
+  }
+
+  clearOaPidFile();
+  return false;
+}
 
 // OpenClaw Proxy API endpoints
 let openclawProxyProcesses = new Map(); // Store running proxy processes
@@ -381,6 +527,125 @@ app.get('/api/openclaw-proxy/status', (req, res) => {
       error: 'failed_to_get_openclaw_status'
     });
   }
+});
+
+// OA Service API endpoints
+
+// GET /api/oa/status - Get OA service status
+app.get('/api/oa/status', async (req, res) => {
+  try {
+    const status = await getOaStatus();
+    res.json(status);
+  } catch (error) {
+    logger.error('Failed to get OA status', { error: error?.message || String(error) });
+    res.status(500).json({ error: 'failed_to_get_oa_status' });
+  }
+});
+
+// POST /api/oa/start - Start OA service
+app.post('/api/oa/start', async (req, res) => {
+  try {
+    // Check if already running
+    const currentStatus = await getOaStatus();
+    if (currentStatus.running) {
+      return res.json({
+        success: true,
+        running: true,
+        port: currentStatus.port,
+        pid: currentStatus.pid,
+        url: currentStatus.url,
+        message: 'OA service already running'
+      });
+    }
+
+    // Get config path from request or use default
+    const configPath = req.body.configPath || path.join(process.cwd(), 'oa-project', 'config.yaml');
+
+    // Check if config exists
+    if (!fs.existsSync(configPath)) {
+      return res.status(400).json({ error: 'OA config file not found', configPath });
+    }
+
+    // Find available port
+    const port = await findAvailablePort(OA_DEFAULT_PORT, OA_MAX_PORT_SCAN);
+    if (!port) {
+      return res.status(500).json({ error: 'No available port found' });
+    }
+
+    // Spawn OA process
+    const oaArgs = ['serve', '--config', configPath, '--port', String(port), '--no-open'];
+
+    const oaSpawn = spawn('oa', oaArgs, {
+      cwd: path.dirname(configPath),
+      env: { ...process.env },
+      detached: false
+    });
+
+    // Save PID file
+    saveOaPidFile(port, oaSpawn.pid);
+
+    // Handle process events
+    oaSpawn.stdout?.on('data', (data) => {
+      logger.info(`OA stdout: ${data.toString().trim()}`);
+    });
+
+    oaSpawn.stderr?.on('data', (data) => {
+      logger.info(`OA stderr: ${data.toString().trim()}`);
+    });
+
+    oaSpawn.on('error', (err) => {
+      logger.error('OA process error', { error: err.message });
+      clearOaPidFile();
+    });
+
+    oaSpawn.on('close', (code) => {
+      logger.info('OA process closed', { code });
+      clearOaPidFile();
+    });
+
+    oaProcess = oaSpawn;
+
+    // Wait a bit for the server to start
+    await new Promise(resolve => setTimeout(resolve, 1000));
+
+    res.json({
+      success: true,
+      running: true,
+      port,
+      pid: oaSpawn.pid,
+      url: `http://127.0.0.1:${port}`,
+      message: 'OA service started successfully'
+    });
+
+  } catch (error) {
+    logger.error('Failed to start OA service', { error: error?.message || String(error) });
+    res.status(500).json({ error: 'failed_to_start_oa_service' });
+  }
+});
+
+// POST /api/oa/stop - Stop OA service
+app.post('/api/oa/stop', (req, res) => {
+  try {
+    const stopped = stopOaProcess();
+
+    if (stopped) {
+      res.json({ success: true, message: 'OA service stopped successfully' });
+    } else {
+      res.status(404).json({ error: 'OA service not started by Nexus or not running' });
+    }
+  } catch (error) {
+    logger.error('Failed to stop OA service', { error: error?.message || String(error) });
+    res.status(500).json({ error: 'failed_to_stop_oa_service' });
+  }
+});
+
+// GET /api/oa/logs - Get OA logs (if available)
+app.get('/api/oa/logs', (req, res) => {
+  // OA doesn't have a standard log file, but we can provide info
+  res.json({
+    message: 'OA logs are streamed to server console',
+    logLocation: 'Nexus server console'
+  });
 });
 
 // Get all agents grouped by category with collapsible sections
@@ -1498,6 +1763,57 @@ async function checkProcesses() {
 server.listen(PORT, '0.0.0.0', async () => {
   logger.serverStarted(PORT, 0);
 
+  // OA auto-start on startup (if not running)
+  const oaStatus = await getOaStatus();
+  if (oaStatus.running) {
+    logger.info('OA service detected running', { port: oaStatus.port, pid: oaStatus.pid, startedByNexus: oaStatus.startedByNexus });
+  } else {
+    try {
+      // Use the embedded oa-project under the repo by default
+      const defaultConfigPath = path.join(process.cwd(), 'oa-project', 'config.yaml');
+      if (fs.existsSync(defaultConfigPath)) {
+        const port = await findAvailablePort(OA_DEFAULT_PORT, OA_MAX_PORT_SCAN);
+        if (port) {
+          const oaArgs = ['serve', '--config', defaultConfigPath, '--port', String(port), '--no-open'];
+          const oaSpawn = spawn('oa', oaArgs, {
+            cwd: path.dirname(defaultConfigPath),
+            env: { ...process.env },
+            detached: false
+          });
+
+          saveOaPidFile(port, oaSpawn.pid);
+
+          oaSpawn.stdout?.on('data', (data) => {
+            logger.info(`OA stdout: ${data.toString().trim()}`);
+          });
+
+          oaSpawn.stderr?.on('data', (data) => {
+            logger.info(`OA stderr: ${data.toString().trim()}`);
+          });
+
+          oaSpawn.on('error', (err) => {
+            logger.error('OA process error', { error: err.message });
+            clearOaPidFile();
+          });
+
+          oaSpawn.on('close', (code) => {
+            logger.info('OA process closed', { code });
+            clearOaPidFile();
+          });
+
+          oaProcess = oaSpawn;
+          logger.info('OA service auto-started', { port, pid: oaSpawn.pid });
+        } else {
+          logger.warn('OA auto-start skipped: no available port found', { startPort: OA_DEFAULT_PORT, maxScan: OA_MAX_PORT_SCAN });
+        }
+      } else {
+        logger.warn('OA auto-start skipped: config.yaml not found', { defaultConfigPath });
+      }
+    } catch (error) {
+      logger.error('OA auto-start failed', { error: error?.message || String(error) });
+    }
+  }
+
   await PricingService.initPricingService();
 
   // Initialize WebSocket
@@ -1594,6 +1910,8 @@ process.on('SIGTERM', () => {
       logger.error('Failed to kill OpenClaw proxy process', { sessionId, error: error.message });
     }
   }
+  // Stop OA service if started by Nexus
+  stopOaProcess();
   process.exit(0);
 });
 
@@ -1607,5 +1925,7 @@ process.on('SIGINT', () => {
       logger.error('Failed to kill OpenClaw proxy process', { sessionId, error: error.message });
     }
   }
+  // Stop OA service if started by Nexus
+  stopOaProcess();
   process.exit(0);
 });

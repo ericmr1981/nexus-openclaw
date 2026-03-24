@@ -8,13 +8,14 @@ import CalendarView from './components/CalendarView';
 import ScheduledTaskDetail from './components/ScheduledTaskDetail';
 import ScheduledTaskEdit from './components/ScheduledTaskEdit';
 import OpenClawProxyPage from './components/OpenClawProxyPage';
+import OAPage from './components/OAPage';
 import { BitOfficeEmbed } from './components/BitOfficeEmbed';
 import './components/BitOfficeEmbed.css';
 import { useDisplayedSessions } from './hooks/useDisplayedSessions';
 import { useSessionsStream } from './hooks/useSessionsStream';
 import { useSystemMetrics } from './hooks/useSystemMetrics';
 import { formatTokens, formatUsd } from './utils/formatters';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 function AppContent() {
   const { sessions, usageTotals, connectionStatus } = useSessionsStream();
@@ -23,8 +24,50 @@ function AppContent() {
   const [viewMode, setViewMode] = useState<'normal' | 'dense'>('normal');
   const costPrecision = usageTotals.totals.runningAgents > 0 ? 4 : 2;
 
+  const [oaStatus, setOaStatus] = useState<{ running: boolean; port?: number; url?: string } | null>(null);
+  const [oaLoading, setOaLoading] = useState(false);
+
+  const startOa = async () => {
+    if (oaLoading || oaStatus?.running) return;
+    setOaLoading(true);
+    try {
+      const res = await fetch('/api/oa/start', { method: 'POST' });
+      const data = await res.json();
+      if (data.running) {
+        setOaStatus(data);
+      }
+    } catch (err) {
+      console.error('Failed to start OA:', err);
+    } finally {
+      setOaLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const fetchStatus = async () => {
+      try {
+        const res = await fetch('/api/oa/status');
+        const data = await res.json();
+        if (!cancelled) setOaStatus(data);
+      } catch {
+        if (!cancelled) setOaStatus(null);
+      }
+    };
+
+    fetchStatus();
+    const id = window.setInterval(fetchStatus, 10_000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, []);
+
   const location = useLocation();
   const isEmbedPage = location.pathname === '/embed';
+  const isOaPage = location.pathname === '/oa';
 
   return (
     <div className="app">
@@ -66,6 +109,12 @@ function AppContent() {
             <span className="metric-label">COST</span>
             <strong className="metric-value">{formatUsd(usageTotals.totals.totalCostUsd, costPrecision)}</strong>
           </div>
+          <div className="metric-box" onClick={startOa} style={{ cursor: oaStatus?.running ? 'default' : 'pointer' }}>
+            <span className="metric-label">OA</span>
+            <strong className={`metric-value ${oaStatus?.running ? 'value-success' : ''}`}>
+              {oaLoading ? 'starting...' : (oaStatus ? (oaStatus.running ? `running:${oaStatus.port ?? ''}` : 'stopped') : '...')}
+            </strong>
+          </div>
         </div>
       </header>
 
@@ -81,13 +130,16 @@ function AppContent() {
           <NavLink to="/openclaw-proxy" className={({ isActive }) => `route-tab ${isActive ? 'is-active' : ''}`}>
             OpenClaw Proxy
           </NavLink>
+          <NavLink to="/oa" className={({ isActive }) => `route-tab ${isActive ? 'is-active' : ''}`}>
+            OA Dashboard
+          </NavLink>
           <NavLink to="/embed" className={({ isActive }) => `route-tab ${isActive ? 'is-active' : ''}`}>
             BIT Office
           </NavLink>
         </nav>
       </aside>
 
-      <main className={`page-content ${isEmbedPage ? 'page-content-full-width' : ''}`}>
+      <main className={`page-content ${isEmbedPage || isOaPage ? 'page-content-full-width' : ''}`}>
         <Routes>
         <Route
           path="/"
@@ -122,12 +174,13 @@ function AppContent() {
         <Route path="/scheduled-tasks/:taskId" element={<ScheduledTaskDetail />} />
         <Route path="/scheduled-tasks/:taskId/edit" element={<ScheduledTaskEdit />} />
         <Route path="/openclaw-proxy" element={<OpenClawProxyPage />} />
+        <Route path="/oa" element={<OAPage />} />
         <Route path="/embed" element={<BitOfficeEmbed />} />
         </Routes>
       </main>
 
       {/* Right sidebar - Unified Agents Panel */}
-      {!isEmbedPage && <AgentsPanel />}
+      {!isEmbedPage && !isOaPage && <AgentsPanel />}
     </div>
   );
 }

@@ -79,6 +79,48 @@ npm run dev:all
 - 首次连接：`init`（包含当前 `sessions` 与 `usageTotals`）
 - 增量事件：`session_init`、`message_add`、`state_change`、`session_remove`、`usage_totals`
 
+### 6) OA (Operational Analytics) 服务集成
+
+Nexus 支持自动管理 OA (Operational Analytics) 仪表盘服务：
+
+- **启动行为**：
+  - Nexus 启动时检测 OA 进程是否运行（通过 `.nexus-runtime/oa.json` PID 文件）
+  - 如果是 Nexus 启动的 OA，状态会记录并在日志中显示
+- **关闭行为**：
+  - Nexus 收到 SIGTERM/SIGINT 时，会自动停止由 Nexus 启动的 OA 进程
+  - 仅停止 `startedByNexus=true` 的进程，避免误杀外部启动的 OA
+- **端口管理**：
+  - 默认端口：3460
+  - 如果端口冲突，自动向上扫描最多 10 个端口
+
+## OA 服务 API
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/api/oa/status` | GET | 获取 OA 服务状态 |
+| `/api/oa/start` | POST | 启动 OA 服务 |
+| `/api/oa/stop` | POST | 停止 OA 服务 |
+| `/api/oa/logs` | GET | 获取 OA 日志位置 |
+
+### 启动 OA
+
+```bash
+# 使用默认配置
+curl -X POST http://localhost:7878/api/oa/start
+
+# 指定自定义配置路径
+curl -X POST http://localhost:7878/api/oa/start \
+  -H "Content-Type: application/json" \
+  -d '{"configPath": "/path/to/oa/config.yaml"}'
+```
+
+### 获取状态
+
+```bash
+curl http://localhost:7878/api/oa/status
+# 返回: {running: true, port: 3460, pid: 12345, url: "http://127.0.0.1:3460", startedByNexus: true}
+```
+
 ## 监控目录
 
 - Claude Code：`~/.claude/projects/`
