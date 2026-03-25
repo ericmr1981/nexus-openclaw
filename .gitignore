@@ -23,3 +23,8 @@ oa-project/logs/
 
 # Local tool dumps / vendored experiments (kept out of repo to avoid huge commits)
 tools/
+
+# Playwright outputs
+playwright-report/
+test-results/
+/tests/e2e/artifacts/

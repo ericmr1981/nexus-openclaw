@@ -639,6 +639,65 @@
   border: 2px solid;
 }
 
+.follow-btn {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 6px 10px;
+  border-radius: 0;
+  letter-spacing: 0.08em;
+  font-family: 'Space Mono', monospace;
+  border: 2px solid var(--color-border);
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+
+.follow-btn.is-following {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+.follow-btn.is-paused {
+  border-color: var(--color-border);
+  color: var(--color-text-tertiary);
+}
+
+.follow-btn.has-new {
+  border-color: #F59E0B;
+  color: #F59E0B;
+}
+
+.follow-btn:hover {
+  background: var(--color-bg-tertiary);
+}
+
+.pin-btn {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 6px 10px;
+  border-radius: 0;
+  letter-spacing: 0.08em;
+  font-family: 'Space Mono', monospace;
+  border: 2px solid var(--color-border);
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+
+.pin-btn.is-pinned {
+  border-color: #22C55E;
+  color: #22C55E;
+}
+
+.pin-btn:hover {
+  background: var(--color-bg-tertiary);
+}
+
+.pin-btn-dense {
+  padding: 4px 8px;
+  font-size: 9px;
+}
+
 .state-active {
   background: var(--color-primary);
   color: #ffffff;

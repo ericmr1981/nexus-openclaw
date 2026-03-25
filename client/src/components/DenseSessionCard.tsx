@@ -6,9 +6,11 @@ import { getMessageKind } from '../utils/message-kind';
 interface DenseSessionCardProps {
   session: Session;
   showToolEvents: boolean;
+  pinnedAgents?: string[];
+  onTogglePin?: (agentId: string) => void;
 }
 
-export function DenseSessionCard({ session, showToolEvents }: DenseSessionCardProps) {
+export function DenseSessionCard({ session, showToolEvents, pinnedAgents = [], onTogglePin }: DenseSessionCardProps) {
   const toolConfig = TOOL_CONFIG[session.tool] || TOOL_CONFIG['claude-code'];
   const scrollRef = useRef<HTMLDivElement>(null);
   const [isEntering, setIsEntering] = useState(true);
@@ -64,6 +66,15 @@ export function DenseSessionCard({ session, showToolEvents }: DenseSessionCardPr
           {toolConfig.label}
         </span>
         <span className="dense-card-name">{session.name}</span>
+        {session.agentId && (
+          <button
+            className={`pin-btn pin-btn-dense ${pinnedAgents.includes(session.agentId) ? 'is-pinned' : ''}`}
+            onClick={() => onTogglePin?.(session.agentId!)}
+            title={pinnedAgents.includes(session.agentId) ? 'Unpin this agent' : 'Pin this agent'}
+          >
+            {pinnedAgents.includes(session.agentId) ? 'PINNED' : 'PIN'}
+          </button>
+        )}
         {(session.agentId || session.model) && (
           <span className="dense-card-meta">
             {session.agentId && <span className="dense-card-meta-badge">{session.agentId}</span>}

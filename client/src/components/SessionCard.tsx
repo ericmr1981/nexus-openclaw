@@ -7,6 +7,8 @@ import { ToolEvent } from './ToolEvent';
 
 interface SessionCardProps {
   session: Session;
+  pinnedAgents?: string[];
+  onTogglePin?: (agentId: string) => void;
   showToolEvents?: boolean;
 }
 
@@ -33,9 +35,13 @@ const formatTime = (timestampMs?: number): string => {
 };
 
 // Note: showToolEvents prop is deprecated; viewMode now controls filtering
-export function SessionCard({ session }: SessionCardProps) {
+export function SessionCard({ session, pinnedAgents = [], onTogglePin }: SessionCardProps) {
   const toolConfig = TOOL_CONFIG[session.tool] || TOOL_CONFIG['claude-code'];
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const [followTail, setFollowTail] = useState(true);
+  const [hasNewSincePause, setHasNewSincePause] = useState(false);
+  const lastSeenModifiedRef = useRef<number>(session.lastModified);
   const [isEntering, setIsEntering] = useState(true);
   const [viewMode, setViewMode] = useState<MessageViewMode>('all');
 
@@ -236,9 +242,29 @@ export function SessionCard({ session }: SessionCardProps) {
     return () => window.clearTimeout(timer);
   }, []);
 
+  const isNearBottom = () => {
+    const el = messagesContainerRef.current;
+    if (!el) return true;
+    return el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+  };
+
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [visibleMessages.length]);
+    // When streaming updates arrive, message count may not change, but lastModified will.
+    // FollowTail keeps the view pinned to the newest content unless the user scrolls up.
+    if (!followTail) return;
+
+    setHasNewSincePause(false);
+    lastSeenModifiedRef.current = session.lastModified;
+    messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
+  }, [followTail, session.lastModified, visibleMessages.length, viewMode]);
+
+  useEffect(() => {
+    // If user paused (scrolled up), and new data arrives, show a subtle indicator.
+    if (followTail) return;
+    if (session.lastModified > lastSeenModifiedRef.current) {
+      setHasNewSincePause(true);
+    }
+  }, [followTail, session.lastModified]);
 
   const cardClass = `session-card ${isEntering ? 'card-entering' : ''} ${session.state === 'active' ? 'card-active' : ''} ${session.state === 'cooling' ? 'card-exiting' : ''}`;
 
@@ -262,9 +288,51 @@ export function SessionCard({ session }: SessionCardProps) {
           </span>
         )}
         <span className={`session-state state-${session.state}`}>{session.state.toUpperCase()}</span>
+        {session.agentId && (
+          <button
+            className={`pin-btn ${pinnedAgents.includes(session.agentId) ? 'is-pinned' : ''}`}
+            onClick={() => onTogglePin?.(session.agentId!)}
+            title={pinnedAgents.includes(session.agentId) ? 'Unpin this agent' : 'Pin this agent'}
+          >
+            {pinnedAgents.includes(session.agentId) ? 'PINNED' : 'PIN'}
+          </button>
+        )}
+        <button
+          className={`follow-btn ${followTail ? 'is-following' : 'is-paused'} ${hasNewSincePause ? 'has-new' : ''}`}
+          onClick={() => {
+            setFollowTail(true);
+            setHasNewSincePause(false);
+            lastSeenModifiedRef.current = session.lastModified;
+            window.requestAnimationFrame(() => {
+              messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
+            });
+          }}
+          title={followTail ? 'Following newest output (auto-scroll)' : (hasNewSincePause ? 'New output arrived (click to jump to latest)' : 'Paused (scroll up to read; click to follow newest)')}
+        >
+          {followTail ? 'FOLLOW' : (hasNewSincePause ? 'NEW' : 'PAUSED')}
+        </button>
       </div>
 
-      <div className="messages">
+      <div
+        className="messages"
+        ref={messagesContainerRef}
+        onScroll={() => {
+          if (isNearBottom()) {
+            // Auto-resume following when the user scrolls back to the bottom.
+            if (!followTail) {
+              setFollowTail(true);
+              setHasNewSincePause(false);
+              lastSeenModifiedRef.current = session.lastModified;
+            }
+          } else {
+            // Stop auto-follow when the user scrolls up.
+            if (followTail) {
+              setFollowTail(false);
+              lastSeenModifiedRef.current = session.lastModified;
+            }
+          }
+        }}
+      >
         {visibleMessages.map((message, idx) => {
           const timeStr = formatTime(message.timestampMs);
           const isTextMessage = getMessageKind(message.content) === 'text';

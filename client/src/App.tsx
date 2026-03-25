@@ -11,7 +11,7 @@ import OpenClawProxyPage from './components/OpenClawProxyPage';
 import OAPage from './components/OAPage';
 import { BitOfficeEmbed } from './components/BitOfficeEmbed';
 import './components/BitOfficeEmbed.css';
-import { useDisplayedSessions } from './hooks/useDisplayedSessions';
+import { useDisplayedSessions, type SessionSortMode } from './hooks/useDisplayedSessions';
 import { useSessionsStream } from './hooks/useSessionsStream';
 import { useSystemMetrics } from './hooks/useSystemMetrics';
 import { formatTokens, formatUsd } from './utils/formatters';
@@ -19,7 +19,23 @@ import { useEffect, useState } from 'react';
 
 function AppContent() {
   const { sessions, usageTotals, connectionStatus } = useSessionsStream();
-  const { visibleSessions } = useDisplayedSessions(sessions);
+  const [sortMode, setSortMode] = useState<SessionSortMode>(() => {
+    const v = window.localStorage.getItem('nexus.sessionSort');
+    return v === 'activity' ? 'activity' : 'name';
+  });
+
+  const [pinnedAgents, setPinnedAgents] = useState<string[]>(() => {
+    try {
+      const raw = window.localStorage.getItem('nexus.pinnedAgents');
+      if (!raw) return ['jarvis', 'Paul_Operator'];
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : ['jarvis', 'Paul_Operator'];
+    } catch {
+      return ['jarvis', 'Paul_Operator'];
+    }
+  });
+
+  const { visibleSessions } = useDisplayedSessions(sessions, sortMode, pinnedAgents);
   const { metrics: systemMetrics } = useSystemMetrics();
   const [viewMode, setViewMode] = useState<'normal' | 'dense'>('normal');
   const costPrecision = usageTotals.totals.runningAgents > 0 ? 4 : 2;
@@ -84,6 +100,39 @@ function AppContent() {
           <div className="metric-box" onClick={() => setViewMode(v => v === 'normal' ? 'dense' : 'normal')} style={{ cursor: 'pointer' }}>
             <span className="metric-label">MODE</span>
             <strong className="metric-value">{viewMode}</strong>
+          </div>
+          <div
+            className="metric-box"
+            onClick={() => {
+              const next: SessionSortMode = sortMode === 'name' ? 'activity' : 'name';
+              setSortMode(next);
+              window.localStorage.setItem('nexus.sessionSort', next);
+            }}
+            style={{ cursor: 'pointer' }}
+            title={sortMode === 'activity' ? 'Sorting by most recently active session' : 'Stable sorting (agent/name first)'}
+          >
+            <span className="metric-label">SORT</span>
+            <strong className="metric-value">{sortMode}</strong>
+          </div>
+
+          <div
+            className="metric-box"
+            onClick={() => {
+              const current = pinnedAgents.join(',');
+              const input = window.prompt('Pin agents (comma-separated agentId). Example: jarvis,Paul_Operator', current);
+              if (input === null) return;
+              const next = input
+                .split(',')
+                .map(s => s.trim())
+                .filter(Boolean);
+              setPinnedAgents(next);
+              window.localStorage.setItem('nexus.pinnedAgents', JSON.stringify(next));
+            }}
+            style={{ cursor: 'pointer' }}
+            title="Pinned agents always stay on top"
+          >
+            <span className="metric-label">PIN</span>
+            <strong className="metric-value">{pinnedAgents.length}</strong>
           </div>
           <div className="metric-box">
             <span className="metric-label">ACTIVE</span>
@@ -150,13 +199,36 @@ function AppContent() {
               {viewMode === 'normal' ? (
                 <div className="sessions-grid">
                   {visibleSessions.map((session) => (
-                    <SessionCard key={session.sessionId} session={session} />
+                    <SessionCard
+                      key={session.sessionId}
+                      session={session}
+                      pinnedAgents={pinnedAgents}
+                      onTogglePin={(agentId) => {
+                        const next = pinnedAgents.includes(agentId)
+                          ? pinnedAgents.filter((a) => a !== agentId)
+                          : [agentId, ...pinnedAgents];
+                        setPinnedAgents(next);
+                        window.localStorage.setItem('nexus.pinnedAgents', JSON.stringify(next));
+                      }}
+                    />
                   ))}
                 </div>
               ) : (
                 <div className="sessions-grid-dense">
                   {visibleSessions.map((session) => (
-                    <DenseSessionCard key={session.sessionId} session={session} showToolEvents={false} />
+                    <DenseSessionCard
+                      key={session.sessionId}
+                      session={session}
+                      showToolEvents={false}
+                      pinnedAgents={pinnedAgents}
+                      onTogglePin={(agentId) => {
+                        const next = pinnedAgents.includes(agentId)
+                          ? pinnedAgents.filter((a) => a !== agentId)
+                          : [agentId, ...pinnedAgents];
+                        setPinnedAgents(next);
+                        window.localStorage.setItem('nexus.pinnedAgents', JSON.stringify(next));
+                      }}
+                    />
                   ))}
                 </div>
               )}
